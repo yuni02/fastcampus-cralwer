@@ -59,11 +59,11 @@ KAKAO_EMAIL = 'your_email@kakao.com'
 KAKAO_PASSWORD = 'your_password'
 
 # MySQL 데이터베이스 정보
-MYSQL_HOST = '192.168.1.59'
-MYSQL_PORT = 3306
+MYSQL_HOST = 'db ip주소'
+MYSQL_PORT = 'db port번호'
 MYSQL_USER = 'root'
 MYSQL_PASSWORD = 'your_db_password'
-MYSQL_DATABASE = 'crawler'
+MYSQL_DATABASE = '저장할 db schema명'
 ```
 
 ### 5. MySQL 데이터베이스 설정
