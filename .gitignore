@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Scrapy
+.scrapy/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Claude
+.claude/
+
+# Logs
+*.log
+
+# Screenshots & Debug files
+*.png
+*.html
+*.txt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Credentials - NEVER COMMIT!
+credentials.py
+credentials_example.py
+.env
+**/settings_local.py
+**/*_secret.py
+cookies.json
