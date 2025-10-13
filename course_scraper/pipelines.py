@@ -8,7 +8,7 @@
 from itemadapter import ItemAdapter
 import pymysql
 import logging
-from datetime import datetime
+from datetime import datetime, date, timedelta
 
 
 class MySQLPipeline:
@@ -75,6 +75,9 @@ class MySQLPipeline:
                 # 강의 정보 저장
                 self.save_course(course_id, item)
 
+                # 주간 진도 스냅샷 저장 (NEW)
+                self.save_progress_snapshot(course_id, item)
+
                 # 크롤링 로그 저장
                 self.save_crawl_log(course_id, 'success', None)
 
@@ -136,37 +139,73 @@ class MySQLPipeline:
         self.cursor.execute(sql, values)
 
     def save_lecture_item(self, item):
-        """LectureItem 저장 (UPSERT)"""
-        sql = """
-            INSERT INTO lectures (
-                course_id, course_title, section_number, section_title,
-                lecture_number, lecture_title, lecture_time,
-                is_completed, sort_order
-            ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s
-            )
-            ON DUPLICATE KEY UPDATE
-                course_title = VALUES(course_title),
-                section_title = VALUES(section_title),
-                lecture_title = VALUES(lecture_title),
-                lecture_time = VALUES(lecture_time),
-                is_completed = VALUES(is_completed),
-                updated_at = CURRENT_TIMESTAMP
+        """LectureItem 저장"""
+        # course_id를 int로 변환
+        course_id_str = item.get('course_id')
+        if isinstance(course_id_str, str) and course_id_str.isdigit():
+            course_id = int(course_id_str)
+        elif isinstance(course_id_str, int):
+            course_id = course_id_str
+        else:
+            logging.warning(f"Invalid course_id: {course_id_str}")
+            return
+
+        # 먼저 기존 레코드가 있는지 확인 (course_id, section_number, lecture_number로 식별)
+        check_sql = """
+            SELECT lecture_id FROM lectures
+            WHERE course_id = %s
+              AND section_number = %s
+              AND lecture_number = %s
         """
-
-        values = (
-            item.get('course_id'),
-            item.get('course_title'),
+        self.cursor.execute(check_sql, (
+            course_id,
             item.get('section_number'),
-            item.get('section_title'),
-            item.get('lecture_number'),
-            item.get('lecture_title'),
-            item.get('lecture_time'),
-            item.get('is_completed', False),
-            item.get('sort_order')
-        )
+            item.get('lecture_number')
+        ))
+        existing = self.cursor.fetchone()
 
-        self.cursor.execute(sql, values)
+        if existing:
+            # UPDATE
+            update_sql = """
+                UPDATE lectures SET
+                    section_title = %s,
+                    lecture_title = %s,
+                    lecture_time = %s,
+                    is_completed = %s,
+                    sort_order = %s
+                WHERE lecture_id = %s
+            """
+            values = (
+                item.get('section_title'),
+                item.get('lecture_title'),
+                item.get('lecture_time'),
+                item.get('is_completed', False),
+                item.get('sort_order'),
+                existing['lecture_id']
+            )
+            self.cursor.execute(update_sql, values)
+        else:
+            # INSERT
+            insert_sql = """
+                INSERT INTO lectures (
+                    course_id, section_number, section_title,
+                    lecture_number, lecture_title, lecture_time,
+                    is_completed, sort_order
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s
+                )
+            """
+            values = (
+                course_id,
+                item.get('section_number'),
+                item.get('section_title'),
+                item.get('lecture_number'),
+                item.get('lecture_title'),
+                item.get('lecture_time'),
+                item.get('is_completed', False),
+                item.get('sort_order')
+            )
+            self.cursor.execute(insert_sql, values)
 
     def save_lectures(self, course_id, curriculum):
         """강의 목차 저장"""
@@ -263,3 +302,39 @@ class MySQLPipeline:
         """
 
         self.cursor.execute(sql, (course_id, status, error_message))
+
+    def save_progress_snapshot(self, course_id, item):
+        """주간 진도 스냅샷 저장 (NEW)"""
+        try:
+            # 현재 주의 월요일 날짜 계산 (스냅샷 기준일)
+            today = date.today()
+            days_since_monday = today.weekday()  # 월요일=0, 일요일=6
+            snapshot_date = today - timedelta(days=days_since_monday)
+
+            sql = """
+                INSERT INTO course_progress_snapshots (
+                    course_id, snapshot_date, progress_rate,
+                    study_time, total_lecture_time
+                ) VALUES (
+                    %s, %s, %s, %s, %s
+                )
+                ON DUPLICATE KEY UPDATE
+                    progress_rate = VALUES(progress_rate),
+                    study_time = VALUES(study_time),
+                    total_lecture_time = VALUES(total_lecture_time)
+            """
+
+            values = (
+                course_id,
+                snapshot_date,
+                item.get('progress_rate'),
+                item.get('study_time'),
+                item.get('total_lecture_time')
+            )
+
+            self.cursor.execute(sql, values)
+            logging.info(f"Saved snapshot for course_id {course_id} on {snapshot_date}")
+
+        except Exception as e:
+            logging.warning(f"Failed to save snapshot for course_id {course_id}: {e}")
+            # 스냅샷 저장 실패해도 전체 프로세스는 계속 진행

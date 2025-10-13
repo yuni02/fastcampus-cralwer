@@ -255,240 +255,142 @@ class FastCampusSpider(scrapy.Spider):
                 # 페이지가 완전히 로드될 때까지 짧게 대기
                 await page.wait_for_timeout(1000)
 
-                # 추가 네비게이션: 마이페이지 > 내강의장으로 이동
+                # 추가 네비게이션: 직접 URL로 내 강의장 페이지로 이동
                 try:
-                    # 1. 헤더에서 "장윤경님" 클릭
-                    self.logger.info("Clicking user menu (장윤경님)...")
-                    user_menu_selectors = [
-                        'button:has-text("장윤경")',
-                        'a:has-text("장윤경")',
-                        '[class*="profile"]',
-                        '[class*="Profile"]',
-                        'button[class*="user"]',
-                        'button[class*="User"]',
+                    self.logger.info("Navigating directly to classroom page...")
+
+                    # 직접 내 강의장 페이지로 이동
+                    await page.goto('https://fastcampus.co.kr/me/courses', wait_until='domcontentloaded')
+                    await page.wait_for_timeout(2000)
+
+                    current_url = page.url
+                    self.logger.info(f"✓ Navigated to: {current_url}")
+                    await page.screenshot(path='screenshot_6_classroom_page.png')
+                    self.logger.info("✓ Saved screenshot: screenshot_6_classroom_page.png")
+
+                    # 수강중" 탭 확인/클릭
+                    self.logger.info("Checking '수강중' tab...")
+                    # 수강중 탭이 이미 선택되어 있는지 확인, 아니면 클릭
+                    tab_selectors = [
+                        'button:has-text("수강중")',
+                        'a:has-text("수강중")',
+                        '[role="tab"]:has-text("수강중")',
                     ]
 
-                    clicked_user_menu = False
-                    for selector in user_menu_selectors:
+                    for selector in tab_selectors:
                         try:
-                            await page.click(selector, timeout=3000)
-                            self.logger.info(f"✓ Clicked user menu with selector: {selector}")
-                            clicked_user_menu = True
+                            await page.click(selector, timeout=2000)
+                            self.logger.info(f"✓ Clicked 수강중 tab")
+                            await page.wait_for_timeout(2000)
                             break
                         except Exception:
                             continue
 
-                    if not clicked_user_menu:
-                        self.logger.error("✗ Could not click user menu")
-                        await page.screenshot(path='screenshot_error_user_menu.png')
-                    else:
-                        # 드롭다운 메뉴가 완전히 렌더링될 때까지 대기 (애니메이션 포함)
-                        await page.wait_for_timeout(1000)
-                        await page.screenshot(path='screenshot_6_user_menu_opened.png')
-                        self.logger.info("✓ Saved screenshot: screenshot_6_user_menu_opened.png")
+                    await page.screenshot(path='screenshot_7_studying_tab.png')
+                    self.logger.info("✓ Saved screenshot: screenshot_7_studying_tab.png")
 
-                        # 2. "마이페이지" 클릭 - 더 많은 선택자와 대기 시간 추가
-                        self.logger.info("Clicking '마이페이지'...")
-                        mypage_selectors = [
-                            'a:has-text("마이페이지")',
-                            'button:has-text("마이페이지")',
-                            '[href*="mypage"]',
-                            '[href*="my-page"]',
-                            'li:has-text("마이페이지") a',
-                            'div:has-text("마이페이지") a',
-                            '[class*="menu"] a:has-text("마이페이지")',
-                            '[class*="dropdown"] a:has-text("마이페이지")',
-                        ]
+                    # 페이지 스크롤하여 모든 강의 로드
+                    self.logger.info("Scrolling to load all courses...")
 
-                        clicked_mypage = False
-                        for selector in mypage_selectors:
+                    # 페이지 끝까지 스크롤
+                    previous_height = 0
+                    scroll_attempts = 0
+                    max_scroll_attempts = 20  # 최대 20번 스크롤
+
+                    while scroll_attempts < max_scroll_attempts:
+                        # 현재 페이지 높이
+                        current_height = await page.evaluate('document.body.scrollHeight')
+
+                        if current_height == previous_height:
+                            # 더 이상 로드할 콘텐츠가 없음
+                            break
+
+                        # 페이지 끝까지 스크롤
+                        await page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
+                        await page.wait_for_timeout(2000)  # 콘텐츠 로딩 대기
+
+                        previous_height = current_height
+                        scroll_attempts += 1
+                        self.logger.info(f"  Scrolled {scroll_attempts} times...")
+
+                    # 맨 위로 돌아가기
+                    await page.evaluate('window.scrollTo(0, 0)')
+                    await page.wait_for_timeout(1000)
+
+                    # 수강중 강의 목록 가져오기
+                    self.logger.info("Getting list of courses by clicking buttons with popup detection...")
+
+                    course_boxes = await page.query_selector_all('.vn-me-courses__box')
+                    total_courses = len(course_boxes)  # 모든 강의
+                    self.logger.info(f"Found {total_courses} course boxes")
+
+                    course_urls = []
+
+                    for idx in range(total_courses):
+                        # 매번 새로 쿼리 (DOM이 변경될 수 있음)
+                        course_boxes = await page.query_selector_all('.vn-me-courses__box')
+                        box = course_boxes[idx]
+
+                        # 강의 제목 추출
+                        title_elem = await box.query_selector('.vn-me-courses__title')
+                        title = await title_elem.inner_text() if title_elem else f'Course {idx + 1}'
+                        self.logger.info(f"  {idx + 1}/{total_courses}. {title}")
+
+                        # 버튼 찾기
+                        classroom_btn = await box.query_selector('button[data-e2e="classroom-enter-button"]')
+
+                        if classroom_btn:
+                            # 새 페이지나 팝업이 열리는지 감지
                             try:
-                                # 요소가 보이는지 먼저 확인
-                                elem = await page.query_selector(selector)
-                                if elem:
-                                    is_visible = await elem.is_visible()
-                                    if is_visible:
-                                        await elem.click()
-                                        self.logger.info(f"✓ Clicked 마이페이지 with selector: {selector}")
-                                        clicked_mypage = True
-                                        break
+                                self.logger.info(f"     Clicking and monitoring for new pages/popups...")
+
+                                # 새 페이지 열림을 감지 (팝업이나 새 탭)
+                                async with page.context.expect_page(timeout=5000) as page_info:
+                                    await classroom_btn.click()
+
+                                # 새 페이지가 열렸음
+                                new_page = await page_info.value
+                                await new_page.wait_for_load_state('load', timeout=10000)
+
+                                course_url = new_page.url
+                                self.logger.info(f"     ✓ New page opened: {course_url}")
+
+                                if '/classroom/' in course_url:
+                                    course_urls.append(course_url)
+                                    self.logger.info(f"     ✓ Added classroom URL")
+
+                                # 새 페이지 닫기
+                                await new_page.close()
+                                await page.wait_for_timeout(1000)
+
                             except Exception as e:
-                                self.logger.debug(f"  Failed selector {selector}: {str(e)[:50]}")
-                                continue
+                                self.logger.warning(f"     No new page opened, trying direct navigation...")
 
-                        if not clicked_mypage:
-                            self.logger.error("✗ Could not click 마이페이지")
-                            await page.screenshot(path='screenshot_error_mypage.png')
-                            # 페이지의 HTML 일부를 로그로 출력하여 디버깅
-                            page_content = await page.content()
-                            if '마이페이지' in page_content:
-                                self.logger.info("Found '마이페이지' text in page, but couldn't click")
-                            else:
-                                self.logger.warning("'마이페이지' text not found in page")
-                        else:
-                            await page.wait_for_timeout(1000)
-                            await page.screenshot(path='screenshot_7_mypage.png')
-                            self.logger.info("✓ Saved screenshot: screenshot_7_mypage.png")
-
-                            # 3. 왼쪽 메뉴에서 "내 강의장" 클릭
-                            self.logger.info("Clicking '내 강의장'...")
-                            classroom_menu_selectors = [
-                                'a:has-text("내 강의장")',
-                                'button:has-text("내 강의장")',
-                                '[href*="classroom"]',
-                                'nav a:has-text("내 강의장")',
-                            ]
-
-                            clicked_classroom_menu = False
-                            for selector in classroom_menu_selectors:
+                                # 새 페이지가 열리지 않으면 현재 페이지에서 navigation 시도
                                 try:
-                                    await page.click(selector, timeout=2000)
-                                    self.logger.info(f"✓ Clicked 내 강의장 with selector: {selector}")
-                                    clicked_classroom_menu = True
-                                    break
-                                except Exception:
-                                    continue
+                                    current_url_before = page.url
+                                    await classroom_btn.click()
+                                    await page.wait_for_timeout(3000)
+                                    current_url_after = page.url
 
-                            if not clicked_classroom_menu:
-                                self.logger.error("✗ Could not click 내 강의장")
-                                await page.screenshot(path='screenshot_error_classroom_menu.png')
-                            else:
-                                await page.wait_for_timeout(1500)
-                                await page.screenshot(path='screenshot_8_classroom_list.png')
-                                self.logger.info("✓ Saved screenshot: screenshot_8_classroom_list.png")
+                                    if current_url_before != current_url_after and '/classroom/' in current_url_after:
+                                        self.logger.info(f"     ✓ Navigated to: {current_url_after}")
+                                        course_urls.append(current_url_after)
 
-                                current_url = page.url
-                                self.logger.info(f"Current URL after navigation: {current_url}")
+                                        # 뒤로 가기
+                                        await page.go_back()
+                                        await page.wait_for_timeout(2000)
+                                    else:
+                                        self.logger.warning(f"     URL didn't change: {current_url_after}")
+                                except Exception as nav_error:
+                                    self.logger.error(f"     Navigation failed: {str(nav_error)[:100]}")
 
-                                # 4. "수강중" 탭 확인/클릭
-                                self.logger.info("Checking '수강중' tab...")
-                                try:
-                                    # 수강중 탭이 이미 선택되어 있는지 확인, 아니면 클릭
-                                    tab_selectors = [
-                                        'button:has-text("수강중")',
-                                        'a:has-text("수강중")',
-                                        '[role="tab"]:has-text("수강중")',
-                                    ]
+                    self.logger.info(f"✓ Found {len(course_urls)} total course URLs")
+                    for idx, url in enumerate(course_urls, 1):
+                        self.logger.info(f"  {idx}. {url}")
 
-                                    for selector in tab_selectors:
-                                        try:
-                                            await page.click(selector, timeout=2000)
-                                            self.logger.info(f"✓ Clicked 수강중 tab")
-                                            await page.wait_for_timeout(2000)
-                                            break
-                                        except Exception:
-                                            continue
-
-                                    await page.screenshot(path='screenshot_9_studying_tab.png')
-                                    self.logger.info("✓ Saved screenshot: screenshot_9_studying_tab.png")
-
-                                    # 5. 페이지 스크롤하여 모든 강의 로드
-                                    self.logger.info("Scrolling to load all courses...")
-
-                                    # 페이지 끝까지 스크롤
-                                    previous_height = 0
-                                    scroll_attempts = 0
-                                    max_scroll_attempts = 20  # 최대 20번 스크롤
-
-                                    while scroll_attempts < max_scroll_attempts:
-                                        # 현재 페이지 높이
-                                        current_height = await page.evaluate('document.body.scrollHeight')
-
-                                        if current_height == previous_height:
-                                            # 더 이상 로드할 콘텐츠가 없음
-                                            break
-
-                                        # 페이지 끝까지 스크롤
-                                        await page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
-                                        await page.wait_for_timeout(2000)  # 콘텐츠 로딩 대기
-
-                                        previous_height = current_height
-                                        scroll_attempts += 1
-                                        self.logger.info(f"  Scrolled {scroll_attempts} times...")
-
-                                    # 맨 위로 돌아가기
-                                    await page.evaluate('window.scrollTo(0, 0)')
-                                    await page.wait_for_timeout(1000)
-
-                                    # 6. 수강중 강의 목록 가져오기
-                                    self.logger.info("Getting list of courses by clicking buttons with popup detection...")
-
-                                    course_boxes = await page.query_selector_all('.vn-me-courses__box')
-                                    total_courses = len(course_boxes)  # 모든 강의
-                                    self.logger.info(f"Found {total_courses} course boxes")
-
-                                    course_urls = []
-
-                                    for idx in range(total_courses):
-                                        # 매번 새로 쿼리 (DOM이 변경될 수 있음)
-                                        course_boxes = await page.query_selector_all('.vn-me-courses__box')
-                                        box = course_boxes[idx]
-
-                                        # 강의 제목 추출
-                                        title_elem = await box.query_selector('.vn-me-courses__title')
-                                        title = await title_elem.inner_text() if title_elem else f'Course {idx + 1}'
-                                        self.logger.info(f"  {idx + 1}/{total_courses}. {title}")
-
-                                        # 버튼 찾기
-                                        classroom_btn = await box.query_selector('button[data-e2e="classroom-enter-button"]')
-
-                                        if classroom_btn:
-                                            # 새 페이지나 팝업이 열리는지 감지
-                                            try:
-                                                self.logger.info(f"     Clicking and monitoring for new pages/popups...")
-
-                                                # 새 페이지 열림을 감지 (팝업이나 새 탭)
-                                                async with page.context.expect_page(timeout=5000) as page_info:
-                                                    await classroom_btn.click()
-
-                                                # 새 페이지가 열렸음
-                                                new_page = await page_info.value
-                                                await new_page.wait_for_load_state('load', timeout=10000)
-
-                                                course_url = new_page.url
-                                                self.logger.info(f"     ✓ New page opened: {course_url}")
-
-                                                if '/classroom/' in course_url:
-                                                    course_urls.append(course_url)
-                                                    self.logger.info(f"     ✓ Added classroom URL")
-
-                                                # 새 페이지 닫기
-                                                await new_page.close()
-                                                await page.wait_for_timeout(1000)
-
-                                            except Exception as e:
-                                                self.logger.warning(f"     No new page opened, trying direct navigation...")
-
-                                                # 새 페이지가 열리지 않으면 현재 페이지에서 navigation 시도
-                                                try:
-                                                    current_url_before = page.url
-                                                    await classroom_btn.click()
-                                                    await page.wait_for_timeout(3000)
-                                                    current_url_after = page.url
-
-                                                    if current_url_before != current_url_after and '/classroom/' in current_url_after:
-                                                        self.logger.info(f"     ✓ Navigated to: {current_url_after}")
-                                                        course_urls.append(current_url_after)
-
-                                                        # 뒤로 가기
-                                                        await page.go_back()
-                                                        await page.wait_for_timeout(2000)
-                                                    else:
-                                                        self.logger.warning(f"     URL didn't change: {current_url_after}")
-                                                except Exception as nav_error:
-                                                    self.logger.error(f"     Navigation failed: {str(nav_error)[:100]}")
-
-                                    self.logger.info(f"✓ Found {len(course_urls)} total course URLs")
-                                    for idx, url in enumerate(course_urls, 1):
-                                        self.logger.info(f"  {idx}. {url}")
-
-                                    # 페이지 닫기 전에 course_urls를 저장
-                                    self.course_urls_to_crawl = course_urls
-
-                                except Exception as e:
-                                    self.logger.error(f"Failed to get course list: {e}")
-                                    import traceback
-                                    self.logger.error(traceback.format_exc())
+                    # 페이지 닫기 전에 course_urls를 저장
+                    self.course_urls_to_crawl = course_urls
 
                 except Exception as e:
                     self.logger.error(f"Navigation failed: {e}")
