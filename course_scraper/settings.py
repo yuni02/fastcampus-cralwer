@@ -98,7 +98,7 @@ import sys
 import os
 
 # credentials.py 직접 로드
-_project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+_project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 _credentials_path = os.path.join(_project_root, 'credentials.py')
 
 # 기본값

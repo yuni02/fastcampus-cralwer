@@ -80,36 +80,64 @@ USE crawler;
 
 ## 사용 방법
 
-### 패스트캠퍼스 강의 크롤링
+### 기본 실행 방법
 
 ```bash
+# 1. 가상환경 활성화
+source .venv/bin/activate
+
+# 2. course_scraper 디렉토리로 이동
 cd course_scraper
+
+# 3. 크롤링 실행
+scrapy crawl fastcampus_daily
+```
+
+### Spider 종류별 사용 방법
+
+#### 1. `fastcampus_discover` (월 1회 실행)
+새로운 강의 URL 발견 및 DB 저장
+```bash
+scrapy crawl fastcampus_discover
+```
+
+#### 2. `fastcampus_daily` (매일 실행, 추천)
+DB에 있는 강의들의 진도율/커리큘럼 업데이트
+```bash
+scrapy crawl fastcampus_daily
+```
+
+#### 3. `fastcampus` (전체 크롤링)
+강의 목록 수집 + 각 강의 크롤링 (시간 오래 걸림)
+```bash
 scrapy crawl fastcampus
 ```
 
-### 인프런 강의 크롤링
-
+#### 4. `fastcampus_test` (테스트용)
+특정 강의 하나만 테스트
 ```bash
-scrapy crawl inflearn
+scrapy crawl fastcampus_test
 ```
 
-### Udemy 강의 크롤링
+### 추천 실행 순서 (처음이라면)
 
 ```bash
-scrapy crawl udemy
+# 1단계: 먼저 강의 목록 수집 (처음 1회만)
+scrapy crawl fastcampus_discover
+
+# 2단계: 매일 진도 업데이트
+scrapy crawl fastcampus_daily
 ```
 
-### 결과를 JSON으로 저장
+### 기타 유용한 옵션
 
 ```bash
-scrapy crawl fastcampus -o output.json
-```
+# 결과를 JSON으로 저장
+scrapy crawl fastcampus_daily -o output.json
 
-### 로그 레벨 조정
-
-```bash
-scrapy crawl fastcampus -L INFO
-scrapy crawl fastcampus -L ERROR
+# 로그 레벨 조정
+scrapy crawl fastcampus_daily -L INFO
+scrapy crawl fastcampus_daily -L ERROR
 ```
 
 ## 프로젝트 구조

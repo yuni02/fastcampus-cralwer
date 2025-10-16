@@ -5,8 +5,7 @@ import sys
 from scrapy_playwright.page import PageMethod
 
 # credentials.py에서 로그인 정보 가져오기
-# course_scraper/course_scraper/spiders/ -> /Users/jennie/PycharmProjects/fastcampus-scrapping/
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 credentials_path = os.path.join(project_root, 'credentials.py')
 
 # 직접 파일을 읽어서 실행

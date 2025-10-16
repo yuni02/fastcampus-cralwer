@@ -152,7 +152,7 @@ class MySQLPipeline:
 
         # 먼저 기존 레코드가 있는지 확인 (course_id, section_number, lecture_number로 식별)
         check_sql = """
-            SELECT lecture_id FROM lectures
+            SELECT lecture_id, is_completed FROM lectures
             WHERE course_id = %s
               AND section_number = %s
               AND lecture_number = %s
@@ -164,35 +164,74 @@ class MySQLPipeline:
         ))
         existing = self.cursor.fetchone()
 
+        new_is_completed = item.get('is_completed', False)
+
         if existing:
             # UPDATE
-            update_sql = """
-                UPDATE lectures SET
-                    section_title = %s,
-                    lecture_title = %s,
-                    lecture_time = %s,
-                    is_completed = %s,
-                    sort_order = %s
-                WHERE lecture_id = %s
-            """
+            old_is_completed = existing['is_completed']
+
+            # completed_at 로직
+            # False → True: 방금 완료함 → completed_at = NOW()
+            # True → False: 다시 미완료로 → completed_at = NULL
+            # True → True: 이미 완료 → completed_at 유지 (업데이트 안함)
+            # False → False: 계속 미완료 → completed_at 유지 (NULL)
+
+            if old_is_completed == False and new_is_completed == True:
+                # 방금 완료한 경우
+                update_sql = """
+                    UPDATE lectures SET
+                        section_title = %s,
+                        lecture_title = %s,
+                        lecture_time = %s,
+                        is_completed = %s,
+                        sort_order = %s,
+                        completed_at = NOW()
+                    WHERE lecture_id = %s
+                """
+                logging.info(f"✓ Lecture completed: {item.get('lecture_title')}")
+            elif old_is_completed == True and new_is_completed == False:
+                # 다시 미완료로 변경
+                update_sql = """
+                    UPDATE lectures SET
+                        section_title = %s,
+                        lecture_title = %s,
+                        lecture_time = %s,
+                        is_completed = %s,
+                        sort_order = %s,
+                        completed_at = NULL
+                    WHERE lecture_id = %s
+                """
+            else:
+                # 상태 변화 없음 (completed_at 건드리지 않음)
+                update_sql = """
+                    UPDATE lectures SET
+                        section_title = %s,
+                        lecture_title = %s,
+                        lecture_time = %s,
+                        is_completed = %s,
+                        sort_order = %s
+                    WHERE lecture_id = %s
+                """
+
             values = (
                 item.get('section_title'),
                 item.get('lecture_title'),
                 item.get('lecture_time'),
-                item.get('is_completed', False),
+                new_is_completed,
                 item.get('sort_order'),
                 existing['lecture_id']
             )
             self.cursor.execute(update_sql, values)
         else:
             # INSERT
+            # 신규 삽입 시 is_completed가 True이면 completed_at도 설정
             insert_sql = """
                 INSERT INTO lectures (
                     course_id, section_number, section_title,
                     lecture_number, lecture_title, lecture_time,
-                    is_completed, sort_order
+                    is_completed, sort_order, completed_at
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
             """
             values = (
@@ -202,8 +241,9 @@ class MySQLPipeline:
                 item.get('lecture_number'),
                 item.get('lecture_title'),
                 item.get('lecture_time'),
-                item.get('is_completed', False),
-                item.get('sort_order')
+                new_is_completed,
+                item.get('sort_order'),
+                datetime.now() if new_is_completed else None
             )
             self.cursor.execute(insert_sql, values)
 

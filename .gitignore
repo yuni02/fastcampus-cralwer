@@ -56,7 +56,6 @@ Thumbs.db
 
 # Credentials - NEVER COMMIT!
 credentials.py
-credentials_example.py
 .env
 **/settings_local.py
 **/*_secret.py
