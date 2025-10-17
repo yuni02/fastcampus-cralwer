@@ -114,9 +114,9 @@ class MySQLPipeline:
         sql = """
             INSERT INTO courses (
                 course_id, course_title, progress_rate, study_time,
-                total_lecture_time, url
+                total_lecture_time, url, display_order
             ) VALUES (
-                %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s
             )
             ON DUPLICATE KEY UPDATE
                 course_title = VALUES(course_title),
@@ -124,6 +124,7 @@ class MySQLPipeline:
                 study_time = VALUES(study_time),
                 total_lecture_time = VALUES(total_lecture_time),
                 url = VALUES(url),
+                display_order = VALUES(display_order),
                 updated_at = CURRENT_TIMESTAMP
         """
 
@@ -133,7 +134,8 @@ class MySQLPipeline:
             item.get('progress_rate'),
             item.get('study_time'),
             item.get('total_lecture_time'),
-            item.get('url', '')
+            item.get('url', ''),
+            item.get('display_order')
         )
 
         self.cursor.execute(sql, values)

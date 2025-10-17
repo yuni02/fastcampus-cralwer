@@ -14,6 +14,7 @@ class CourseItem(scrapy.Item):
     study_time = scrapy.Field()         # 수강시간 (분)
     total_lecture_time = scrapy.Field() # 총 강의시간 (분)
     url = scrapy.Field()                # 강의 URL
+    display_order = scrapy.Field()      # 강의 표시 순서 (작을수록 위에 표시)
 
 
 class LectureItem(scrapy.Item):

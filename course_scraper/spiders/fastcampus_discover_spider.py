@@ -194,7 +194,7 @@ class FastCampusDiscoverSpider(scrapy.Spider):
                     await page.evaluate('window.scrollTo(0, 0)')
                     await page.wait_for_timeout(1000)
 
-                    # 강의 목록 수집
+                    # 강의 목록 수집 (개선된 버전 - 직접 URL 추출)
                     self.logger.info("Collecting course URLs...")
                     course_boxes = await page.query_selector_all('.vn-me-courses__box')
                     total_courses = len(course_boxes)
@@ -210,45 +210,96 @@ class FastCampusDiscoverSpider(scrapy.Spider):
                         title = await title_elem.inner_text() if title_elem else f'Course {idx + 1}'
                         self.logger.info(f"  {idx + 1}/{total_courses}. {title}")
 
-                        classroom_btn = await box.query_selector('button[data-e2e="classroom-enter-button"]')
+                        course_url = None
 
-                        if classroom_btn:
+                        # 방법 1: <a> 태그에서 URL 추출 시도
+                        try:
+                            link = await box.query_selector('a[href*="/classroom/"]')
+                            if link:
+                                href = await link.get_attribute('href')
+                                if href and '/classroom/' in href:
+                                    # 상대 경로면 절대 경로로 변환
+                                    if href.startswith('/'):
+                                        course_url = f'https://fastcampus.co.kr{href}'
+                                    else:
+                                        course_url = href
+                                    self.logger.info(f"     ✓ Method 1: Found URL from <a> tag: {course_url}")
+                        except Exception as e:
+                            self.logger.debug(f"     Method 1 failed: {e}")
+
+                        # 방법 2: 버튼의 data 속성에서 course_id 추출 시도
+                        if not course_url:
                             try:
-                                async with page.context.expect_page(timeout=5000) as page_info:
-                                    await classroom_btn.click()
-
-                                new_page = await page_info.value
-                                await new_page.wait_for_load_state('load', timeout=10000)
-                                course_url = new_page.url
-                                self.logger.info(f"     ✓ New page opened: {course_url}")
-
-                                if '/classroom/' in course_url:
-                                    course_urls.append(course_url)
-
-                                await new_page.close()
-                                await page.wait_for_timeout(1000)
-
+                                classroom_btn = await box.query_selector('button[data-e2e="classroom-enter-button"]')
+                                if classroom_btn:
+                                    # data-course-id, data-id 등 확인
+                                    for attr in ['data-course-id', 'data-id', 'data-key']:
+                                        course_id = await classroom_btn.get_attribute(attr)
+                                        if course_id:
+                                            course_url = f'https://fastcampus.co.kr/classroom/{course_id}'
+                                            self.logger.info(f"     ✓ Method 2: Extracted course_id from {attr}: {course_id}")
+                                            break
                             except Exception as e:
-                                self.logger.warning(f"     No new page opened, trying direct navigation...")
-                                try:
-                                    current_url_before = page.url
-                                    await classroom_btn.click()
-                                    await page.wait_for_timeout(3000)
-                                    current_url_after = page.url
+                                self.logger.debug(f"     Method 2 failed: {e}")
 
-                                    if current_url_before != current_url_after and '/classroom/' in current_url_after:
-                                        course_urls.append(current_url_after)
-                                        await page.go_back()
-                                        await page.wait_for_timeout(2000)
-                                except Exception:
-                                    pass
+                        # 방법 3: JavaScript evaluate로 데이터 추출
+                        if not course_url:
+                            try:
+                                course_url = await box.evaluate('''
+                                    (element) => {
+                                        // <a> 태그 찾기
+                                        const link = element.querySelector('a[href*="/classroom/"]');
+                                        if (link) return link.href;
+
+                                        // data 속성 찾기
+                                        const btn = element.querySelector('button');
+                                        if (btn) {
+                                            const attrs = ['data-course-id', 'data-id', 'data-key'];
+                                            for (const attr of attrs) {
+                                                const val = btn.getAttribute(attr);
+                                                if (val) return 'https://fastcampus.co.kr/classroom/' + val;
+                                            }
+                                        }
+                                        return null;
+                                    }
+                                ''')
+                                if course_url:
+                                    self.logger.info(f"     ✓ Method 3: Extracted URL via JavaScript: {course_url}")
+                            except Exception as e:
+                                self.logger.debug(f"     Method 3 failed: {e}")
+
+                        # 방법 4: 실패 시 기존 방식 (새 탭 열기) - Fallback
+                        if not course_url:
+                            self.logger.info(f"     Fallback: Using new tab method...")
+                            classroom_btn = await box.query_selector('button[data-e2e="classroom-enter-button"]')
+                            if classroom_btn:
+                                try:
+                                    async with page.context.expect_page(timeout=5000) as page_info:
+                                        await classroom_btn.click()
+
+                                    new_page = await page_info.value
+                                    await new_page.wait_for_load_state('load', timeout=10000)
+                                    course_url = new_page.url
+                                    self.logger.info(f"     ✓ Method 4: Got URL from new page: {course_url}")
+
+                                    await new_page.close()
+                                    await page.wait_for_timeout(1000)
+
+                                except Exception as e:
+                                    self.logger.warning(f"     All methods failed for course {idx + 1}: {e}")
+
+                        # URL을 찾았으면 리스트에 추가
+                        if course_url and '/classroom/' in course_url:
+                            course_urls.append(course_url)
+                        else:
+                            self.logger.warning(f"     ✗ Could not extract URL for course {idx + 1}")
 
                     self.logger.info(f"✓ Found {len(course_urls)} total course URLs")
 
                     # courses 테이블에 저장할 아이템 생성
                     from course_scraper.items import CourseItem
 
-                    for url in course_urls:
+                    for idx, url in enumerate(course_urls, start=1):
                         course_id = url.split('/classroom/')[-1].split('?')[0]
 
                         # 기본 정보만 저장 (제목은 나중에 daily spider에서 업데이트)
@@ -258,7 +309,8 @@ class FastCampusDiscoverSpider(scrapy.Spider):
                             progress_rate=0.0,
                             study_time=0,
                             total_lecture_time=0,
-                            url=url
+                            url=url,
+                            display_order=idx  # 강의 표시 순서 저장
                         )
                         yield course_item
 
