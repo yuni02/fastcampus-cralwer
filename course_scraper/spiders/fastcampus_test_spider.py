@@ -27,7 +27,9 @@ class FastCampusTestSpider(scrapy.Spider):
     TEST_URL = 'https://fastcampus.co.kr/classroom/201998'
 
     custom_settings = {
-        'DOWNLOAD_DELAY': 2,
+        'DOWNLOAD_DELAY': 3,
+        'CONCURRENT_REQUESTS': 1,  # 한 번에 하나만
+        'CONCURRENT_REQUESTS_PER_DOMAIN': 1,
         'ITEM_PIPELINES': {
             "course_scraper.pipelines.MySQLPipeline": 300,
         },  # 파이프라인 활성화
@@ -436,31 +438,106 @@ class FastCampusTestSpider(scrapy.Spider):
         curriculum = []
 
         try:
+            # 커리큘럼 영역이 로드될 때까지 대기
+            await page.wait_for_selector('.classroom-sidebar-clip__chapter', timeout=10000)
+            await page.wait_for_timeout(2000)  # 추가 대기
+
             # 각 섹션(챕터) 찾기
             chapter_elements = await page.query_selector_all('.classroom-sidebar-clip__chapter')
             self.logger.info(f"Found {len(chapter_elements)} chapters")
 
-            # 모든 섹션 열기 (닫혀있는 섹션들)
-            for idx, chapter in enumerate(chapter_elements):
-                try:
-                    # 아코디언 헤더 찾기
-                    header = await chapter.query_selector('.common-accordion-menu__header')
-                    if header:
-                        # 열려있는지 확인
-                        menu = await chapter.query_selector('.common-accordion-menu')
-                        class_attr = await menu.get_attribute('class') if menu else ''
+            if len(chapter_elements) == 0:
+                self.logger.warning("No chapters found! Aborting curriculum extraction.")
+                return curriculum
 
-                        # 닫혀있으면 클릭해서 열기
-                        if 'common-accordion-menu--open' not in class_attr:
-                            self.logger.info(f"  Opening section {idx + 1}...")
+            # STEP 1: 모든 Chapter(큰 섹션) 열기
+            self.logger.info("STEP 1: Opening all chapters (main sections)...")
+
+            opened_chapters = 0
+            for idx, chapter in enumerate(chapter_elements, 1):
+                try:
+                    # 아코디언 메뉴 찾기
+                    menu = await chapter.query_selector('.common-accordion-menu')
+                    if not menu:
+                        continue
+
+                    # 현재 상태 확인
+                    class_attr = await menu.get_attribute('class')
+                    is_open = 'common-accordion-menu--open' in class_attr if class_attr else False
+
+                    if not is_open:
+                        # 헤더 찾기
+                        header = await chapter.query_selector('.common-accordion-menu__header')
+                        if header:
+                            self.logger.info(f"  Opening chapter {idx}/{len(chapter_elements)}...")
+
+                            # 화면에 보이도록 스크롤
+                            await header.scroll_into_view_if_needed()
+                            await page.wait_for_timeout(500)
+
+                            # 클릭
                             await header.click()
-                            await page.wait_for_timeout(500)  # 애니메이션 대기
+                            await page.wait_for_timeout(1500)  # 충분히 대기
+
+                            # 열렸는지 다시 확인
+                            class_attr_after = await menu.get_attribute('class')
+                            if 'common-accordion-menu--open' in class_attr_after:
+                                opened_chapters += 1
+                                self.logger.info(f"    ✓ Chapter {idx} opened")
+                            else:
+                                self.logger.warning(f"    ✗ Chapter {idx} failed, retrying...")
+                                await page.wait_for_timeout(500)
+                                await header.click()
+                                await page.wait_for_timeout(1500)
+                    else:
+                        self.logger.info(f"  Chapter {idx} already open")
+                        opened_chapters += 1
+
                 except Exception as e:
-                    self.logger.warning(f"  Error opening section {idx + 1}: {e}")
+                    self.logger.warning(f"  Error opening chapter {idx}: {e}")
                     continue
 
-            # 모든 섹션이 열린 후 짧은 대기
-            await page.wait_for_timeout(1000)
+            self.logger.info(f"✓ Opened {opened_chapters}/{len(chapter_elements)} chapters")
+            await page.wait_for_timeout(3000)
+
+            # STEP 2: 각 Chapter 안의 모든 sub-section 아코디언도 열기
+            self.logger.info("STEP 2: Opening all sub-sections within chapters...")
+
+            # 페이지 내 모든 아코디언 메뉴 찾기 (chapter 내부 포함)
+            all_accordion_menus = await page.query_selector_all('.common-accordion-menu')
+            self.logger.info(f"Found {len(all_accordion_menus)} total accordion menus")
+
+            opened_subsections = 0
+            for idx, menu in enumerate(all_accordion_menus, 1):
+                try:
+                    # 현재 상태 확인
+                    class_attr = await menu.get_attribute('class')
+                    is_open = 'common-accordion-menu--open' in class_attr if class_attr else False
+
+                    if not is_open:
+                        # 헤더 찾기
+                        header = await menu.query_selector('.common-accordion-menu__header')
+                        if header:
+                            # 화면에 보이도록 스크롤
+                            await header.scroll_into_view_if_needed()
+                            await page.wait_for_timeout(300)
+
+                            # 클릭
+                            await header.click()
+                            await page.wait_for_timeout(1000)
+
+                            # 열렸는지 확인
+                            class_attr_after = await menu.get_attribute('class')
+                            if 'common-accordion-menu--open' in class_attr_after:
+                                opened_subsections += 1
+
+                except Exception as e:
+                    continue
+
+            self.logger.info(f"✓ Opened {opened_subsections} additional sub-sections")
+
+            # 모든 섹션이 열린 후 충분히 대기
+            await page.wait_for_timeout(5000)
 
             # 다시 모든 섹션 가져오기
             chapter_elements = await page.query_selector_all('.classroom-sidebar-clip__chapter')

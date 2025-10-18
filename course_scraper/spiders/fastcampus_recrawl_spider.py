@@ -34,24 +34,31 @@ if not KAKAO_EMAIL or not KAKAO_PASSWORD:
     raise ValueError("KAKAO_EMAIL or KAKAO_PASSWORD not set")
 
 
-class FastCampusDailySpider(scrapy.Spider):
+class FastCampusRecrawlSpider(scrapy.Spider):
     """
-    매일 실행: DB에서 강의 URL을 가져와서 진도율과 커리큘럼을 업데이트하는 spider
+    시간 차이가 큰 코스만 재수집하는 spider
+    - 전체 강의 시간과 수집된 시간 차이가 10% 이상인 코스만 재크롤링
+    - 해당 코스의 기존 lectures만 삭제 후 재수집
+    - 한 번에 한 코스만 처리하여 페이지가 닫히지 않도록 함
     """
-    name = 'fastcampus_daily'
+    name = 'fastcampus_recrawl'
     custom_settings = {
         'DOWNLOAD_DELAY': 3,
-        'CONCURRENT_REQUESTS': 1,  # 한 번에 하나만
-        'CONCURRENT_REQUESTS_PER_DOMAIN': 1,
+        'CONCURRENT_REQUESTS': 1,  # 전체 동시 요청 1개만
+        'CONCURRENT_REQUESTS_PER_DOMAIN': 1,  # 도메인당 1개만
+        'ITEM_PIPELINES': {
+            "course_scraper.pipelines.MySQLPipeline": 300,
+        },
     }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.logged_in = False
         self.course_urls = []
+        self.courses_to_delete = []
 
     def start_requests(self):
-        # DB에서 강의 URL 가져오기
+        # DB에서 시간 차이가 큰 코스 찾기
         try:
             connection = pymysql.connect(
                 host=MYSQL_HOST,
@@ -63,19 +70,51 @@ class FastCampusDailySpider(scrapy.Spider):
             )
 
             with connection.cursor() as cursor:
-                cursor.execute("SELECT course_id, url FROM courses WHERE url IS NOT NULL")
+                # 전체 시간과 수집된 시간 차이가 10% 이상인 코스 찾기
+                cursor.execute("""
+                    SELECT
+                        c.course_id,
+                        c.url,
+                        c.course_title,
+                        c.total_lecture_time as expected_time,
+                        COALESCE(SUM(l.lecture_time), 0) as actual_time,
+                        c.total_lecture_time - COALESCE(SUM(l.lecture_time), 0) as diff
+                    FROM courses c
+                    LEFT JOIN lectures l ON c.course_id = l.course_id
+                    WHERE c.url IS NOT NULL AND c.total_lecture_time > 0
+                    GROUP BY c.course_id, c.course_title, c.total_lecture_time, c.url
+                    HAVING ABS(c.total_lecture_time - COALESCE(SUM(l.lecture_time), 0)) > c.total_lecture_time * 0.1
+                    ORDER BY diff DESC
+                """)
+
                 rows = cursor.fetchall()
-                self.course_urls = [{'course_id': row[0], 'url': row[1]} for row in rows]
+
+                self.logger.info("="*80)
+                self.logger.info(f"시간 차이가 10% 이상인 코스: {len(rows)}개")
+                self.logger.info("="*80)
+
+                for row in rows:
+                    course_id, url, title, expected, actual, diff = row
+                    self.logger.info(f"[{course_id}] {title[:40]}")
+                    self.logger.info(f"  예상: {expected:.1f}분, 실제: {actual:.1f}분, 차이: {diff:.1f}분")
+
+                    self.course_urls.append({
+                        'course_id': course_id,
+                        'url': url,
+                        'title': title
+                    })
+                    self.courses_to_delete.append(course_id)
 
             connection.close()
-            self.logger.info(f"✓ Loaded {len(self.course_urls)} course URLs from DB")
+
+            if not self.course_urls:
+                self.logger.info("✓ 재수집할 코스가 없습니다. 모든 코스가 정상입니다!")
+                return
+
+            self.logger.info(f"\n✓ {len(self.course_urls)}개 코스를 재수집합니다.\n")
 
         except Exception as e:
-            self.logger.error(f"Failed to load URLs from DB: {e}")
-            return
-
-        if not self.course_urls:
-            self.logger.warning("No course URLs found in DB. Run fastcampus_discover first.")
+            self.logger.error(f"Failed to load problematic courses from DB: {e}")
             return
 
         # 로그인 시작
@@ -196,8 +235,11 @@ class FastCampusDailySpider(scrapy.Spider):
                 # 페이지 닫기
                 await page.close()
 
+                # 해당 코스들의 기존 lectures 삭제
+                self.delete_old_lectures()
+
                 # 각 강의 URL을 크롤링
-                self.logger.info(f"Starting to crawl {len(self.course_urls)} courses...")
+                self.logger.info(f"Starting to recrawl {len(self.course_urls)} courses...")
 
                 for course_data in self.course_urls:
                     url = course_data['url']
@@ -224,6 +266,39 @@ class FastCampusDailySpider(scrapy.Spider):
             self.logger.error(traceback.format_exc())
             if page:
                 await page.close()
+
+    def delete_old_lectures(self):
+        """재수집할 코스들의 기존 lectures 삭제"""
+        if not self.courses_to_delete:
+            return
+
+        try:
+            connection = pymysql.connect(
+                host=MYSQL_HOST,
+                port=MYSQL_PORT,
+                user=MYSQL_USER,
+                password=MYSQL_PASSWORD,
+                database=MYSQL_DATABASE,
+                charset='utf8mb4'
+            )
+
+            with connection.cursor() as cursor:
+                course_ids_str = ','.join(map(str, self.courses_to_delete))
+
+                # 삭제 전 개수 확인
+                cursor.execute(f"SELECT COUNT(*) FROM lectures WHERE course_id IN ({course_ids_str})")
+                before_count = cursor.fetchone()[0]
+
+                # 삭제
+                cursor.execute(f"DELETE FROM lectures WHERE course_id IN ({course_ids_str})")
+                connection.commit()
+
+                self.logger.info(f"✓ Deleted {before_count} old lectures from {len(self.courses_to_delete)} courses")
+
+            connection.close()
+
+        except Exception as e:
+            self.logger.error(f"Failed to delete old lectures: {e}")
 
     async def parse(self, response):
         """페이지 파싱 및 강의 정보 추출하여 DB 저장"""
@@ -493,10 +568,6 @@ class FastCampusDailySpider(scrapy.Spider):
                     total_elem = await chapter.query_selector('.classroom-sidebar-clip__chapter__title__number__total')
                     complete_count = int(await complete_elem.inner_text()) if complete_elem else 0
                     total_count = int(await total_elem.inner_text()) if total_elem else 0
-
-                    # 섹션 총 시간
-                    playtime_elem = await chapter.query_selector('.classroom-sidebar-clip__chapter__clip-playtime')
-                    section_playtime = await playtime_elem.inner_text() if playtime_elem else ''
 
                     # 해당 섹션의 강의들 찾기
                     lecture_elements = await chapter.query_selector_all('.classroom-sidebar-clip__chapter__clip')
