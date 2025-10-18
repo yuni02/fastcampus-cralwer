@@ -80,36 +80,155 @@ USE crawler;
 
 ## 사용 방법
 
-### 패스트캠퍼스 강의 크롤링
+### 기본 실행 방법
 
 ```bash
+# 1. 가상환경 활성화
+source .venv/bin/activate
+
+# 2. course_scraper 디렉토리로 이동
 cd course_scraper
+
+# 3. 크롤링 실행
+scrapy crawl fastcampus_daily
+```
+
+### Spider 종류별 사용 방법
+
+#### 1. `fastcampus_discover` (월 1회 실행)
+새로운 강의 URL 발견 및 DB 저장
+```bash
+scrapy crawl fastcampus_discover
+```
+
+#### 2. `fastcampus_daily` (매일 실행, 추천)
+DB에 있는 강의들의 진도율/커리큘럼 업데이트
+```bash
+# 기본 실행 (모든 강의 크롤링)
+scrapy crawl fastcampus_daily
+
+# 목표 강의만 크롤링 (is_target_course = 1인 강의만)
+scrapy crawl fastcampus_daily -a target_only=true
+
+# 최근 24시간 내 업데이트된 강의 제외
+scrapy crawl fastcampus_daily -a skip_recent=true
+
+# 특정 강의 ID만 크롤링
+scrapy crawl fastcampus_daily -a course_id=214390
+
+# 옵션 조합 (목표 강의 + 최근 업데이트 제외)
+scrapy crawl fastcampus_daily -a target_only=true -a skip_recent=true
+```
+
+#### 3. `fastcampus` (전체 크롤링)
+강의 목록 수집 + 각 강의 크롤링 (시간 오래 걸림)
+```bash
 scrapy crawl fastcampus
 ```
 
-### 인프런 강의 크롤링
-
+#### 4. `fastcampus_test` (테스트용)
+특정 강의 하나만 테스트
 ```bash
-scrapy crawl inflearn
+scrapy crawl fastcampus_test
 ```
 
-### Udemy 강의 크롤링
+### 추천 실행 순서 (처음이라면)
 
 ```bash
-scrapy crawl udemy
+# 1단계: 먼저 강의 목록 수집 (처음 1회만)
+scrapy crawl fastcampus_discover
+
+# 2단계: 매일 진도 업데이트
+scrapy crawl fastcampus_daily
 ```
 
-### 결과를 JSON으로 저장
+### 기타 유용한 옵션
 
 ```bash
-scrapy crawl fastcampus -o output.json
+# 결과를 JSON으로 저장
+scrapy crawl fastcampus_daily -o output.json
+
+# 로그 레벨 조정
+scrapy crawl fastcampus_daily -L INFO
+scrapy crawl fastcampus_daily -L ERROR
 ```
 
-### 로그 레벨 조정
+### fastcampus_daily 필터링 옵션 상세 설명
+
+`fastcampus_daily` spider는 효율적인 크롤링을 위해 다음 필터링 옵션을 제공합니다:
+
+#### 1. `target_only=true`
+**용도**: 집중적으로 수강하는 강의만 업데이트
+
+**사용 시나리오**:
+- 구매한 강의가 많지만, 현재 집중적으로 듣는 강의만 매일 업데이트하고 싶을 때
+- DB의 `courses` 테이블에서 `is_target_course = 1`로 설정된 강의만 크롤링
+
+**SQL로 목표 강의 설정**:
+```sql
+-- 특정 강의를 목표 강의로 설정
+UPDATE courses SET is_target_course = 1 WHERE course_id = 214390;
+
+-- 여러 강의를 목표 강의로 설정
+UPDATE courses SET is_target_course = 1 WHERE course_id IN (214390, 123456, 789012);
+
+-- 목표 강의 해제
+UPDATE courses SET is_target_course = 0 WHERE course_id = 214390;
+```
+
+#### 2. `skip_recent=true`
+**용도**: 불필요한 중복 크롤링 방지
+
+**사용 시나리오**:
+- 하루에 여러 번 크롤링을 실행하지만, 이미 최근에 업데이트된 강의는 건너뛰고 싶을 때
+- 24시간 이내 업데이트된 강의는 자동으로 제외됨
+
+**실행 예시**:
+```bash
+# 아침에 실행 (모든 강의 크롤링)
+scrapy crawl fastcampus_daily
+
+# 저녁에 실행 (아침에 업데이트한 강의는 건너뜀)
+scrapy crawl fastcampus_daily -a skip_recent=true
+```
+
+#### 3. `course_id=강의ID`
+**용도**: 특정 강의 하나만 업데이트
+
+**사용 시나리오**:
+- 방금 강의를 들었는데, 해당 강의의 진도만 빠르게 업데이트하고 싶을 때
+- 특정 강의에 문제가 있어서 재크롤링이 필요할 때
+
+**실행 예시**:
+```bash
+# course_id가 214390인 강의만 크롤링
+scrapy crawl fastcampus_daily -a course_id=214390
+```
+
+**강의 ID 확인 방법**:
+```sql
+-- DB에서 강의 ID 조회
+SELECT course_id, course_title, url FROM courses;
+
+-- 또는 강의 URL에서 확인
+-- 예: https://fastcampus.co.kr/classroom/214390
+-- course_id = 214390
+```
+
+#### 옵션 조합 활용 예시
 
 ```bash
-scrapy crawl fastcampus -L INFO
-scrapy crawl fastcampus -L ERROR
+# 사용 예시 1: 목표 강의만 매일 업데이트 (추천)
+scrapy crawl fastcampus_daily -a target_only=true
+
+# 사용 예시 2: 목표 강의 + 최근 업데이트 제외 (하루 여러 번 실행 시)
+scrapy crawl fastcampus_daily -a target_only=true -a skip_recent=true
+
+# 사용 예시 3: 특정 강의만 빠르게 업데이트
+scrapy crawl fastcampus_daily -a course_id=214390
+
+# 사용 예시 4: 모든 강의 전체 업데이트 (주말에 1회)
+scrapy crawl fastcampus_daily
 ```
 
 ## 프로젝트 구조

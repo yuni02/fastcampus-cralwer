@@ -5,7 +5,7 @@ from scrapy_playwright.page import PageMethod
 from datetime import datetime
 
 # credentials.py에서 로그인 정보 가져오기
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 credentials_path = os.path.join(project_root, 'credentials.py')
 
 KAKAO_EMAIL = None
@@ -40,15 +40,19 @@ class FastCampusDailySpider(scrapy.Spider):
     """
     name = 'fastcampus_daily'
     custom_settings = {
-        'DOWNLOAD_DELAY': 3,
-        'CONCURRENT_REQUESTS': 1,  # 한 번에 하나만
-        'CONCURRENT_REQUESTS_PER_DOMAIN': 1,
+        'DOWNLOAD_DELAY': 2,
+        'CONCURRENT_REQUESTS_PER_DOMAIN': 2,
     }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.logged_in = False
         self.course_urls = []
+
+        # 명령줄 옵션
+        self.target_only = kwargs.get('target_only', 'false').lower() == 'true'
+        self.skip_recent = kwargs.get('skip_recent', 'false').lower() == 'true'
+        self.course_id = kwargs.get('course_id', None)
 
     def start_requests(self):
         # DB에서 강의 URL 가져오기
@@ -63,7 +67,28 @@ class FastCampusDailySpider(scrapy.Spider):
             )
 
             with connection.cursor() as cursor:
-                cursor.execute("SELECT course_id, url FROM courses WHERE url IS NOT NULL")
+                # 쿼리 조건 동적 생성
+                conditions = ["url IS NOT NULL"]
+
+                # 옵션 1: 특정 course_id만 크롤링
+                if self.course_id:
+                    conditions.append(f"course_id = {self.course_id}")
+                    self.logger.info(f"Filtering by course_id: {self.course_id}")
+
+                # 옵션 2: 목표 강의만 크롤링
+                elif self.target_only:
+                    conditions.append("is_target_course = 1")
+                    self.logger.info("Filtering: is_target_course = 1")
+
+                # 옵션 3: 최근 업데이트된 강의 제외 (24시간 이내)
+                if self.skip_recent and not self.course_id:
+                    conditions.append("(updated_at < DATE_SUB(NOW(), INTERVAL 1 DAY) OR updated_at IS NULL)")
+                    self.logger.info("Filtering: skip recently updated courses (< 24h)")
+
+                query = f"SELECT course_id, url FROM courses WHERE {' AND '.join(conditions)}"
+                self.logger.info(f"SQL: {query}")
+
+                cursor.execute(query)
                 rows = cursor.fetchall()
                 self.course_urls = [{'course_id': row[0], 'url': row[1]} for row in rows]
 
@@ -377,106 +402,31 @@ class FastCampusDailySpider(scrapy.Spider):
         curriculum = []
 
         try:
-            # 커리큘럼 영역이 로드될 때까지 대기
-            await page.wait_for_selector('.classroom-sidebar-clip__chapter', timeout=10000)
-            await page.wait_for_timeout(2000)  # 추가 대기
-
             # 각 섹션(챕터) 찾기
             chapter_elements = await page.query_selector_all('.classroom-sidebar-clip__chapter')
             self.logger.info(f"Found {len(chapter_elements)} chapters")
 
-            if len(chapter_elements) == 0:
-                self.logger.warning("No chapters found! Aborting curriculum extraction.")
-                return curriculum
-
-            # STEP 1: 모든 Chapter(큰 섹션) 열기
-            self.logger.info("STEP 1: Opening all chapters (main sections)...")
-
-            opened_chapters = 0
-            for idx, chapter in enumerate(chapter_elements, 1):
+            # 모든 섹션 열기 (닫혀있는 섹션들)
+            for idx, chapter in enumerate(chapter_elements):
                 try:
-                    # 아코디언 메뉴 찾기
-                    menu = await chapter.query_selector('.common-accordion-menu')
-                    if not menu:
-                        continue
+                    # 아코디언 헤더 찾기
+                    header = await chapter.query_selector('.common-accordion-menu__header')
+                    if header:
+                        # 열려있는지 확인
+                        menu = await chapter.query_selector('.common-accordion-menu')
+                        class_attr = await menu.get_attribute('class') if menu else ''
 
-                    # 현재 상태 확인
-                    class_attr = await menu.get_attribute('class')
-                    is_open = 'common-accordion-menu--open' in class_attr if class_attr else False
-
-                    if not is_open:
-                        # 헤더 찾기
-                        header = await chapter.query_selector('.common-accordion-menu__header')
-                        if header:
-                            self.logger.info(f"  Opening chapter {idx}/{len(chapter_elements)}...")
-
-                            # 화면에 보이도록 스크롤
-                            await header.scroll_into_view_if_needed()
-                            await page.wait_for_timeout(500)
-
-                            # 클릭
+                        # 닫혀있으면 클릭해서 열기
+                        if 'common-accordion-menu--open' not in class_attr:
+                            self.logger.info(f"  Opening section {idx + 1}...")
                             await header.click()
-                            await page.wait_for_timeout(1500)  # 충분히 대기
-
-                            # 열렸는지 다시 확인
-                            class_attr_after = await menu.get_attribute('class')
-                            if 'common-accordion-menu--open' in class_attr_after:
-                                opened_chapters += 1
-                                self.logger.info(f"    ✓ Chapter {idx} opened")
-                            else:
-                                self.logger.warning(f"    ✗ Chapter {idx} failed, retrying...")
-                                await page.wait_for_timeout(500)
-                                await header.click()
-                                await page.wait_for_timeout(1500)
-                    else:
-                        self.logger.info(f"  Chapter {idx} already open")
-                        opened_chapters += 1
-
+                            await page.wait_for_timeout(500)  # 애니메이션 대기
                 except Exception as e:
-                    self.logger.warning(f"  Error opening chapter {idx}: {e}")
+                    self.logger.warning(f"  Error opening section {idx + 1}: {e}")
                     continue
 
-            self.logger.info(f"✓ Opened {opened_chapters}/{len(chapter_elements)} chapters")
-            await page.wait_for_timeout(3000)
-
-            # STEP 2: 각 Chapter 안의 모든 sub-section 아코디언도 열기
-            self.logger.info("STEP 2: Opening all sub-sections within chapters...")
-
-            # 페이지 내 모든 아코디언 메뉴 찾기 (chapter 내부 포함)
-            all_accordion_menus = await page.query_selector_all('.common-accordion-menu')
-            self.logger.info(f"Found {len(all_accordion_menus)} total accordion menus")
-
-            opened_subsections = 0
-            for idx, menu in enumerate(all_accordion_menus, 1):
-                try:
-                    # 현재 상태 확인
-                    class_attr = await menu.get_attribute('class')
-                    is_open = 'common-accordion-menu--open' in class_attr if class_attr else False
-
-                    if not is_open:
-                        # 헤더 찾기
-                        header = await menu.query_selector('.common-accordion-menu__header')
-                        if header:
-                            # 화면에 보이도록 스크롤
-                            await header.scroll_into_view_if_needed()
-                            await page.wait_for_timeout(300)
-
-                            # 클릭
-                            await header.click()
-                            await page.wait_for_timeout(1000)
-
-                            # 열렸는지 확인
-                            class_attr_after = await menu.get_attribute('class')
-                            if 'common-accordion-menu--open' in class_attr_after:
-                                opened_subsections += 1
-
-                except Exception as e:
-                    continue
-
-            self.logger.info(f"✓ Opened {opened_subsections} additional sub-sections")
-
-            # 모든 섹션이 열린 후 충분히 대기
-            await page.wait_for_timeout(5000)
+            # 모든 섹션이 열린 후 짧은 대기
+            await page.wait_for_timeout(1000)
 
             # 다시 모든 섹션 가져오기
             chapter_elements = await page.query_selector_all('.classroom-sidebar-clip__chapter')

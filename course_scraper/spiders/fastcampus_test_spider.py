@@ -3,7 +3,7 @@ import os
 from scrapy_playwright.page import PageMethod
 
 # credentials.py에서 로그인 정보 가져오기
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 credentials_path = os.path.join(project_root, 'credentials.py')
 
 KAKAO_EMAIL = None
