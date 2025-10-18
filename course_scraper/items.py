@@ -21,9 +21,11 @@ class LectureItem(scrapy.Item):
     """강의 목차 아이템"""
     course_id = scrapy.Field()          # 강의 ID (FK)
     course_title = scrapy.Field()       # 강의 제목 (courses 테이블과 조인 없이 조회 가능)
-    section_number = scrapy.Field()     # 섹션 번호
-    section_title = scrapy.Field()      # 섹션/챕터 제목
-    lecture_number = scrapy.Field()     # 강의 번호 (섹션 내)
+    section_number = scrapy.Field()     # 섹션 번호 (Part 번호)
+    section_title = scrapy.Field()      # 섹션/Part 제목
+    chapter_number = scrapy.Field()     # 챕터 번호 (섹션 내)
+    chapter_title = scrapy.Field()      # 챕터 제목
+    lecture_number = scrapy.Field()     # 강의 번호 (챕터 내)
     lecture_title = scrapy.Field()      # 강의 제목
     lecture_time = scrapy.Field()       # 강의 시간 (분)
     is_completed = scrapy.Field()       # 완료 여부

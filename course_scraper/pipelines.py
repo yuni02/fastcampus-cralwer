@@ -152,16 +152,20 @@ class MySQLPipeline:
             logging.warning(f"Invalid course_id: {course_id_str}")
             return
 
-        # 먼저 기존 레코드가 있는지 확인 (course_id, section_number, lecture_number로 식별)
+        # 먼저 기존 레코드가 있는지 확인 (course_id, section_number, chapter_number, lecture_number로 식별)
         check_sql = """
             SELECT lecture_id, is_completed FROM lectures
             WHERE course_id = %s
               AND section_number = %s
+              AND (chapter_number = %s OR (chapter_number IS NULL AND %s IS NULL))
               AND lecture_number = %s
         """
+        chapter_number = item.get('chapter_number')
         self.cursor.execute(check_sql, (
             course_id,
             item.get('section_number'),
+            chapter_number,
+            chapter_number,
             item.get('lecture_number')
         ))
         existing = self.cursor.fetchone()
@@ -183,6 +187,8 @@ class MySQLPipeline:
                 update_sql = """
                     UPDATE lectures SET
                         section_title = %s,
+                        chapter_number = %s,
+                        chapter_title = %s,
                         lecture_title = %s,
                         lecture_time = %s,
                         is_completed = %s,
@@ -196,6 +202,8 @@ class MySQLPipeline:
                 update_sql = """
                     UPDATE lectures SET
                         section_title = %s,
+                        chapter_number = %s,
+                        chapter_title = %s,
                         lecture_title = %s,
                         lecture_time = %s,
                         is_completed = %s,
@@ -208,6 +216,8 @@ class MySQLPipeline:
                 update_sql = """
                     UPDATE lectures SET
                         section_title = %s,
+                        chapter_number = %s,
+                        chapter_title = %s,
                         lecture_title = %s,
                         lecture_time = %s,
                         is_completed = %s,
@@ -217,6 +227,8 @@ class MySQLPipeline:
 
             values = (
                 item.get('section_title'),
+                item.get('chapter_number'),
+                item.get('chapter_title'),
                 item.get('lecture_title'),
                 item.get('lecture_time'),
                 new_is_completed,
@@ -230,16 +242,19 @@ class MySQLPipeline:
             insert_sql = """
                 INSERT INTO lectures (
                     course_id, section_number, section_title,
+                    chapter_number, chapter_title,
                     lecture_number, lecture_title, lecture_time,
                     is_completed, sort_order, completed_at
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
             """
             values = (
                 course_id,
                 item.get('section_number'),
                 item.get('section_title'),
+                item.get('chapter_number'),
+                item.get('chapter_title'),
                 item.get('lecture_number'),
                 item.get('lecture_title'),
                 item.get('lecture_time'),

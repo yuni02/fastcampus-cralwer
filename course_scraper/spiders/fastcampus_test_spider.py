@@ -434,110 +434,115 @@ class FastCampusTestSpider(scrapy.Spider):
                 await page.close()
 
     async def extract_curriculum_playwright(self, page):
-        """Playwright를 사용하여 커리큘럼 추출"""
+        """Playwright를 사용하여 커리큘럼 추출 - 모든 nested 아코디언 섹션 펼치기"""
         curriculum = []
 
         try:
             # 커리큘럼 영역이 로드될 때까지 대기
             await page.wait_for_selector('.classroom-sidebar-clip__chapter', timeout=10000)
-            await page.wait_for_timeout(2000)  # 추가 대기
+            await page.wait_for_timeout(2000)
 
-            # 각 섹션(챕터) 찾기
-            chapter_elements = await page.query_selector_all('.classroom-sidebar-clip__chapter')
-            self.logger.info(f"Found {len(chapter_elements)} chapters")
+            # STEP 1: 페이지 내 모든 아코디언 헤더 아이콘 찾기
+            self.logger.info("=" * 80)
+            self.logger.info("STEP 1: Finding ALL accordion headers with arrow icons...")
+            self.logger.info("=" * 80)
 
-            if len(chapter_elements) == 0:
-                self.logger.warning("No chapters found! Aborting curriculum extraction.")
-                return curriculum
+            # .common-accordion-menu__header__arrow-icon이 있는 모든 헤더 찾기
+            all_headers = await page.query_selector_all('.common-accordion-menu__header')
+            self.logger.info(f"Found {len(all_headers)} total accordion headers")
 
-            # STEP 1: 모든 Chapter(큰 섹션) 열기
-            self.logger.info("STEP 1: Opening all chapters (main sections)...")
+            # STEP 2: 모든 아코디언 헤더를 차근차근 클릭하여 펼치기
+            self.logger.info("=" * 80)
+            self.logger.info("STEP 2: Opening ALL accordion sections one by one...")
+            self.logger.info("=" * 80)
 
-            opened_chapters = 0
-            for idx, chapter in enumerate(chapter_elements, 1):
+            opened_count = 0
+            for idx, header in enumerate(all_headers, 1):
                 try:
-                    # 아코디언 메뉴 찾기
-                    menu = await chapter.query_selector('.common-accordion-menu')
-                    if not menu:
+                    # 아이콘이 있는지 확인
+                    arrow_icon = await header.query_selector('.common-accordion-menu__header__arrow-icon')
+                    if not arrow_icon:
                         continue
 
-                    # 현재 상태 확인
-                    class_attr = await menu.get_attribute('class')
-                    is_open = 'common-accordion-menu--open' in class_attr if class_attr else False
+                    # 부모 메뉴 찾기
+                    parent_menu = await header.evaluate_handle('el => el.closest(".common-accordion-menu")')
+                    if parent_menu:
+                        parent_menu_elem = parent_menu.as_element()
+                        class_attr = await parent_menu_elem.get_attribute('class')
+                        is_open = 'common-accordion-menu--open' in class_attr if class_attr else False
 
-                    if not is_open:
-                        # 헤더 찾기
-                        header = await chapter.query_selector('.common-accordion-menu__header')
-                        if header:
-                            self.logger.info(f"  Opening chapter {idx}/{len(chapter_elements)}...")
-
-                            # 화면에 보이도록 스크롤
-                            await header.scroll_into_view_if_needed()
-                            await page.wait_for_timeout(500)
-
-                            # 클릭
-                            await header.click()
-                            await page.wait_for_timeout(1500)  # 충분히 대기
-
-                            # 열렸는지 다시 확인
-                            class_attr_after = await menu.get_attribute('class')
-                            if 'common-accordion-menu--open' in class_attr_after:
-                                opened_chapters += 1
-                                self.logger.info(f"    ✓ Chapter {idx} opened")
-                            else:
-                                self.logger.warning(f"    ✗ Chapter {idx} failed, retrying...")
-                                await page.wait_for_timeout(500)
-                                await header.click()
-                                await page.wait_for_timeout(1500)
-                    else:
-                        self.logger.info(f"  Chapter {idx} already open")
-                        opened_chapters += 1
-
-                except Exception as e:
-                    self.logger.warning(f"  Error opening chapter {idx}: {e}")
-                    continue
-
-            self.logger.info(f"✓ Opened {opened_chapters}/{len(chapter_elements)} chapters")
-            await page.wait_for_timeout(3000)
-
-            # STEP 2: 각 Chapter 안의 모든 sub-section 아코디언도 열기
-            self.logger.info("STEP 2: Opening all sub-sections within chapters...")
-
-            # 페이지 내 모든 아코디언 메뉴 찾기 (chapter 내부 포함)
-            all_accordion_menus = await page.query_selector_all('.common-accordion-menu')
-            self.logger.info(f"Found {len(all_accordion_menus)} total accordion menus")
-
-            opened_subsections = 0
-            for idx, menu in enumerate(all_accordion_menus, 1):
-                try:
-                    # 현재 상태 확인
-                    class_attr = await menu.get_attribute('class')
-                    is_open = 'common-accordion-menu--open' in class_attr if class_attr else False
-
-                    if not is_open:
-                        # 헤더 찾기
-                        header = await menu.query_selector('.common-accordion-menu__header')
-                        if header:
+                        if not is_open:
                             # 화면에 보이도록 스크롤
                             await header.scroll_into_view_if_needed()
                             await page.wait_for_timeout(300)
 
                             # 클릭
                             await header.click()
-                            await page.wait_for_timeout(1000)
+                            await page.wait_for_timeout(800)  # 애니메이션 대기
 
                             # 열렸는지 확인
-                            class_attr_after = await menu.get_attribute('class')
+                            class_attr_after = await parent_menu_elem.get_attribute('class')
                             if 'common-accordion-menu--open' in class_attr_after:
-                                opened_subsections += 1
+                                opened_count += 1
+                                if opened_count % 5 == 0:
+                                    self.logger.info(f"  Opened {opened_count} sections so far...")
+                            else:
+                                # 재시도
+                                await page.wait_for_timeout(300)
+                                await header.click()
+                                await page.wait_for_timeout(800)
+                        else:
+                            opened_count += 1
+
+                except Exception as e:
+                    self.logger.warning(f"  Error opening header {idx}: {str(e)[:100]}")
+                    continue
+
+            self.logger.info(f"✓ Opened {opened_count} accordion sections")
+
+            # STEP 3: 추가 섹션이 있을 수 있으므로 한번 더 확인하고 열기
+            self.logger.info("=" * 80)
+            self.logger.info("STEP 3: Double-checking for any remaining closed sections...")
+            self.logger.info("=" * 80)
+
+            await page.wait_for_timeout(2000)
+
+            # 다시 한번 모든 헤더 찾기 (새로 나타난 것들 포함)
+            all_headers_again = await page.query_selector_all('.common-accordion-menu__header')
+            self.logger.info(f"Found {len(all_headers_again)} headers on second pass")
+
+            additional_opened = 0
+            for header in all_headers_again:
+                try:
+                    arrow_icon = await header.query_selector('.common-accordion-menu__header__arrow-icon')
+                    if not arrow_icon:
+                        continue
+
+                    parent_menu = await header.evaluate_handle('el => el.closest(".common-accordion-menu")')
+                    if parent_menu:
+                        parent_menu_elem = parent_menu.as_element()
+                        class_attr = await parent_menu_elem.get_attribute('class')
+                        is_open = 'common-accordion-menu--open' in class_attr if class_attr else False
+
+                        if not is_open:
+                            await header.scroll_into_view_if_needed()
+                            await page.wait_for_timeout(200)
+                            await header.click()
+                            await page.wait_for_timeout(600)
+                            additional_opened += 1
 
                 except Exception as e:
                     continue
 
-            self.logger.info(f"✓ Opened {opened_subsections} additional sub-sections")
+            if additional_opened > 0:
+                self.logger.info(f"✓ Opened {additional_opened} additional sections on second pass")
 
             # 모든 섹션이 열린 후 충분히 대기
-            await page.wait_for_timeout(5000)
+            await page.wait_for_timeout(3000)
+
+            self.logger.info("=" * 80)
+            self.logger.info("All accordion sections opened! Now extracting curriculum data...")
+            self.logger.info("=" * 80)
 
             # 다시 모든 섹션 가져오기
             chapter_elements = await page.query_selector_all('.classroom-sidebar-clip__chapter')

@@ -356,33 +356,69 @@ class FastCampusDailySpider(scrapy.Spider):
                 from course_scraper.items import LectureItem
 
                 sort_order = 0
-                for section_idx, section in enumerate(curriculum, 1):
-                    section_title = section.get('section', f'Section {section_idx}')
-                    lessons = section.get('lessons', [])
+                for section in curriculum:
+                    section_number = section.get('section_number')
+                    section_title = section.get('section', f'Section {section_number}')
+                    chapters = section.get('chapters')
 
-                    self.logger.info(f"  Section {section_idx}: {section_title} ({len(lessons)} lectures)")
+                    if chapters:
+                        # Chapter 구조가 있는 경우
+                        for chapter in chapters:
+                            chapter_number = chapter.get('chapter_number')
+                            chapter_title = chapter.get('chapter_title')
+                            lessons = chapter.get('lessons', [])
 
-                    for lecture_idx, lesson in enumerate(lessons, 1):
-                        sort_order += 1
+                            for lecture_idx, lesson in enumerate(lessons, 1):
+                                sort_order += 1
 
-                        lecture_title = lesson.get('title', f'Lecture {lecture_idx}')
-                        lecture_duration = lesson.get('duration', None)
-                        lecture_time = self.parse_duration(lecture_duration) if lecture_duration else 0
-                        is_completed = lesson.get('is_completed', False)
+                                lecture_title = lesson.get('title', f'Lecture {lecture_idx}')
+                                lecture_duration = lesson.get('duration', None)
+                                lecture_time = self.parse_duration(lecture_duration) if lecture_duration else 0
+                                is_completed = lesson.get('is_completed', False)
 
-                        lecture_item = LectureItem(
-                            course_id=course_id,
-                            course_title=course_title,
-                            section_number=section_idx,
-                            section_title=section_title,
-                            lecture_number=lecture_idx,
-                            lecture_title=lecture_title,
-                            lecture_time=lecture_time,
-                            is_completed=is_completed,
-                            sort_order=sort_order
-                        )
+                                lecture_item = LectureItem(
+                                    course_id=course_id,
+                                    course_title=course_title,
+                                    section_number=section_number,
+                                    section_title=section_title,
+                                    chapter_number=chapter_number,
+                                    chapter_title=chapter_title,
+                                    lecture_number=lecture_idx,
+                                    lecture_title=lecture_title,
+                                    lecture_time=lecture_time,
+                                    is_completed=is_completed,
+                                    sort_order=sort_order
+                                )
 
-                        yield lecture_item
+                                yield lecture_item
+
+                    else:
+                        # Chapter 구조가 없고 Section 레벨에서 바로 강의
+                        lessons = section.get('lessons', [])
+
+                        for lecture_idx, lesson in enumerate(lessons, 1):
+                            sort_order += 1
+
+                            lecture_title = lesson.get('title', f'Lecture {lecture_idx}')
+                            lecture_duration = lesson.get('duration', None)
+                            lecture_time = self.parse_duration(lecture_duration) if lecture_duration else 0
+                            is_completed = lesson.get('is_completed', False)
+
+                            lecture_item = LectureItem(
+                                course_id=course_id,
+                                course_title=course_title,
+                                section_number=section_number,
+                                section_title=section_title,
+                                chapter_number=None,
+                                chapter_title=None,
+                                lecture_number=lecture_idx,
+                                lecture_title=lecture_title,
+                                lecture_time=lecture_time,
+                                is_completed=is_completed,
+                                sort_order=sort_order
+                            )
+
+                            yield lecture_item
 
                 self.logger.info(f"✓ Extracted {len(curriculum)} sections, {sort_order} total lectures")
             else:
@@ -398,98 +434,252 @@ class FastCampusDailySpider(scrapy.Spider):
                 await page.close()
 
     async def extract_curriculum_playwright(self, page):
-        """Playwright를 사용하여 커리큘럼 추출"""
+        """Playwright를 사용하여 커리큘럼 추출 - 모든 nested 아코디언 섹션 펼치기"""
         curriculum = []
 
         try:
-            # 각 섹션(챕터) 찾기
-            chapter_elements = await page.query_selector_all('.classroom-sidebar-clip__chapter')
-            self.logger.info(f"Found {len(chapter_elements)} chapters")
+            # 커리큘럼 영역이 로드될 때까지 대기
+            await page.wait_for_selector('.classroom-sidebar-clip__chapter', timeout=10000)
+            await page.wait_for_timeout(2000)
 
-            # 모든 섹션 열기 (닫혀있는 섹션들)
-            for idx, chapter in enumerate(chapter_elements):
+            # STEP 1: 페이지 내 모든 아코디언 헤더 아이콘 찾기
+            self.logger.info("=" * 80)
+            self.logger.info("STEP 1: Finding ALL accordion headers with arrow icons...")
+            self.logger.info("=" * 80)
+
+            # .common-accordion-menu__header__arrow-icon이 있는 모든 헤더 찾기
+            all_headers = await page.query_selector_all('.common-accordion-menu__header')
+            self.logger.info(f"Found {len(all_headers)} total accordion headers")
+
+            # STEP 2: 모든 아코디언 헤더를 차근차근 클릭하여 펼치기
+            self.logger.info("=" * 80)
+            self.logger.info("STEP 2: Opening ALL accordion sections one by one...")
+            self.logger.info("=" * 80)
+
+            opened_count = 0
+            for idx, header in enumerate(all_headers, 1):
                 try:
-                    # 아코디언 헤더 찾기
-                    header = await chapter.query_selector('.common-accordion-menu__header')
-                    if header:
-                        # 열려있는지 확인
-                        menu = await chapter.query_selector('.common-accordion-menu')
-                        class_attr = await menu.get_attribute('class') if menu else ''
+                    # 아이콘이 있는지 확인
+                    arrow_icon = await header.query_selector('.common-accordion-menu__header__arrow-icon')
+                    if not arrow_icon:
+                        continue
 
-                        # 닫혀있으면 클릭해서 열기
-                        if 'common-accordion-menu--open' not in class_attr:
-                            self.logger.info(f"  Opening section {idx + 1}...")
+                    # 부모 메뉴 찾기
+                    parent_menu = await header.evaluate_handle('el => el.closest(".common-accordion-menu")')
+                    if parent_menu:
+                        parent_menu_elem = parent_menu.as_element()
+                        class_attr = await parent_menu_elem.get_attribute('class')
+                        is_open = 'common-accordion-menu--open' in class_attr if class_attr else False
+
+                        if not is_open:
+                            # 화면에 보이도록 스크롤
+                            await header.scroll_into_view_if_needed()
+                            await page.wait_for_timeout(300)
+
+                            # 클릭
                             await header.click()
-                            await page.wait_for_timeout(500)  # 애니메이션 대기
+                            await page.wait_for_timeout(800)  # 애니메이션 대기
+
+                            # 열렸는지 확인
+                            class_attr_after = await parent_menu_elem.get_attribute('class')
+                            if 'common-accordion-menu--open' in class_attr_after:
+                                opened_count += 1
+                                if opened_count % 5 == 0:
+                                    self.logger.info(f"  Opened {opened_count} sections so far...")
+                            else:
+                                # 재시도
+                                await page.wait_for_timeout(300)
+                                await header.click()
+                                await page.wait_for_timeout(800)
+                        else:
+                            opened_count += 1
+
                 except Exception as e:
-                    self.logger.warning(f"  Error opening section {idx + 1}: {e}")
+                    self.logger.warning(f"  Error opening header {idx}: {str(e)[:100]}")
                     continue
 
-            # 모든 섹션이 열린 후 짧은 대기
-            await page.wait_for_timeout(1000)
+            self.logger.info(f"✓ Opened {opened_count} accordion sections")
+
+            # STEP 3: 추가 섹션이 있을 수 있으므로 한번 더 확인하고 열기
+            self.logger.info("=" * 80)
+            self.logger.info("STEP 3: Double-checking for any remaining closed sections...")
+            self.logger.info("=" * 80)
+
+            await page.wait_for_timeout(2000)
+
+            # 다시 한번 모든 헤더 찾기 (새로 나타난 것들 포함)
+            all_headers_again = await page.query_selector_all('.common-accordion-menu__header')
+            self.logger.info(f"Found {len(all_headers_again)} headers on second pass")
+
+            additional_opened = 0
+            for header in all_headers_again:
+                try:
+                    arrow_icon = await header.query_selector('.common-accordion-menu__header__arrow-icon')
+                    if not arrow_icon:
+                        continue
+
+                    parent_menu = await header.evaluate_handle('el => el.closest(".common-accordion-menu")')
+                    if parent_menu:
+                        parent_menu_elem = parent_menu.as_element()
+                        class_attr = await parent_menu_elem.get_attribute('class')
+                        is_open = 'common-accordion-menu--open' in class_attr if class_attr else False
+
+                        if not is_open:
+                            await header.scroll_into_view_if_needed()
+                            await page.wait_for_timeout(200)
+                            await header.click()
+                            await page.wait_for_timeout(600)
+                            additional_opened += 1
+
+                except Exception as e:
+                    continue
+
+            if additional_opened > 0:
+                self.logger.info(f"✓ Opened {additional_opened} additional sections on second pass")
+
+            # 모든 섹션이 열린 후 충분히 대기
+            await page.wait_for_timeout(3000)
+
+            self.logger.info("=" * 80)
+            self.logger.info("All accordion sections opened! Now extracting curriculum data...")
+            self.logger.info("=" * 80)
 
             # 다시 모든 섹션 가져오기
-            chapter_elements = await page.query_selector_all('.classroom-sidebar-clip__chapter')
+            section_elements = await page.query_selector_all('.classroom-sidebar-clip__chapter')
 
-            for section_idx, chapter in enumerate(chapter_elements, 1):
+            for section_idx, section_elem in enumerate(section_elements, 1):
                 try:
-                    # 섹션 제목
-                    section_title_elem = await chapter.query_selector('.classroom-sidebar-clip__chapter__title__text')
+                    # 섹션(Part) 제목
+                    section_title_elem = await section_elem.query_selector('.classroom-sidebar-clip__chapter__title__text')
                     section_title = await section_title_elem.inner_text() if section_title_elem else f'Section {section_idx}'
                     section_title = section_title.strip()
 
                     # 완료/전체 강의 수
-                    complete_elem = await chapter.query_selector('.classroom-sidebar-clip__chapter__title__number__complete')
-                    total_elem = await chapter.query_selector('.classroom-sidebar-clip__chapter__title__number__total')
+                    complete_elem = await section_elem.query_selector('.classroom-sidebar-clip__chapter__title__number__complete')
+                    total_elem = await section_elem.query_selector('.classroom-sidebar-clip__chapter__title__number__total')
                     complete_count = int(await complete_elem.inner_text()) if complete_elem else 0
                     total_count = int(await total_elem.inner_text()) if total_elem else 0
 
                     # 섹션 총 시간
-                    playtime_elem = await chapter.query_selector('.classroom-sidebar-clip__chapter__clip-playtime')
+                    playtime_elem = await section_elem.query_selector('.classroom-sidebar-clip__chapter__clip-playtime')
                     section_playtime = await playtime_elem.inner_text() if playtime_elem else ''
 
-                    # 해당 섹션의 강의들 찾기
-                    lecture_elements = await chapter.query_selector_all('.classroom-sidebar-clip__chapter__clip')
-                    lessons = []
+                    # Chapter들을 찾기 (.classroom-sidebar-clip__chapter__part__title)
+                    chapter_elements = await section_elem.query_selector_all('.classroom-sidebar-clip__chapter__part__title')
 
-                    self.logger.info(f"  Section {section_idx}: {section_title} ({complete_count}/{total_count}) - {len(lecture_elements)} lectures")
+                    # Chapter가 있으면 Chapter별로 강의를 그룹화, 없으면 Section 레벨에서 바로 강의 추출
+                    if chapter_elements and len(chapter_elements) > 0:
+                        # Chapter 구조가 있는 경우
+                        self.logger.info(f"  Section {section_idx}: {section_title} (has {len(chapter_elements)} chapters)")
 
-                    for lecture_idx, lecture_elem in enumerate(lecture_elements, 1):
-                        try:
-                            # 강의 제목
-                            title_elem = await lecture_elem.query_selector('.classroom-sidebar-clip__chapter__clip__title')
-                            lecture_title = await title_elem.inner_text() if title_elem else f'Lecture {lecture_idx}'
-                            lecture_title = lecture_title.strip()
+                        chapters_data = []
+                        for chapter_idx, chapter_title_elem in enumerate(chapter_elements, 1):
+                            try:
+                                chapter_title = await chapter_title_elem.inner_text() if chapter_title_elem else f'Chapter {chapter_idx}'
+                                chapter_title = chapter_title.strip()
 
-                            # 강의 시간
-                            time_elem = await lecture_elem.query_selector('.classroom-sidebar-clip__chapter__clip__time')
-                            lecture_duration = await time_elem.inner_text() if time_elem else ''
-                            lecture_duration = lecture_duration.strip()
+                                # 이 Chapter의 강의들 찾기
+                                # chapter_title_elem의 부모에서 강의들 찾기
+                                chapter_parent = await chapter_title_elem.evaluate_handle('el => el.closest(".classroom-sidebar-clip__chapter__part")')
+                                if chapter_parent:
+                                    chapter_parent_elem = chapter_parent.as_element()
+                                    lecture_elements = await chapter_parent_elem.query_selector_all('.classroom-sidebar-clip__chapter__clip')
+                                else:
+                                    lecture_elements = []
 
-                            # 완료 여부 확인
-                            class_attr = await lecture_elem.get_attribute('class')
-                            is_completed = 'classroom-sidebar-clip__chapter__clip--complete' in class_attr if class_attr else False
+                                lessons = []
+                                for lecture_idx, lecture_elem in enumerate(lecture_elements, 1):
+                                    try:
+                                        # 강의 제목
+                                        title_elem = await lecture_elem.query_selector('.classroom-sidebar-clip__chapter__clip__title')
+                                        lecture_title = await title_elem.inner_text() if title_elem else f'Lecture {lecture_idx}'
+                                        lecture_title = lecture_title.strip()
 
-                            lessons.append({
-                                'title': lecture_title,
-                                'duration': lecture_duration,
-                                'is_completed': is_completed
+                                        # 강의 시간
+                                        time_elem = await lecture_elem.query_selector('.classroom-sidebar-clip__chapter__clip__time')
+                                        lecture_duration = await time_elem.inner_text() if time_elem else ''
+                                        lecture_duration = lecture_duration.strip()
+
+                                        # 완료 여부 확인
+                                        class_attr = await lecture_elem.get_attribute('class')
+                                        is_completed = 'classroom-sidebar-clip__chapter__clip--complete' in class_attr if class_attr else False
+
+                                        lessons.append({
+                                            'title': lecture_title,
+                                            'duration': lecture_duration,
+                                            'is_completed': is_completed
+                                        })
+
+                                    except Exception as e:
+                                        self.logger.warning(f"      Error parsing lecture {lecture_idx} in chapter {chapter_idx}: {e}")
+                                        continue
+
+                                if lessons:
+                                    chapters_data.append({
+                                        'chapter_number': chapter_idx,
+                                        'chapter_title': chapter_title,
+                                        'lessons': lessons
+                                    })
+                                    self.logger.info(f"    Chapter {chapter_idx}: {chapter_title} ({len(lessons)} lectures)")
+
+                            except Exception as e:
+                                self.logger.warning(f"    Error parsing chapter {chapter_idx}: {e}")
+                                continue
+
+                        if chapters_data:
+                            curriculum.append({
+                                'section': section_title,
+                                'section_number': section_idx,
+                                'chapters': chapters_data,
+                                'complete_count': complete_count,
+                                'total_count': total_count
                             })
 
-                        except Exception as e:
-                            self.logger.warning(f"    Error parsing lecture {lecture_idx}: {e}")
-                            continue
-
-                    if lessons:
-                        curriculum.append({
-                            'section': section_title,
-                            'lessons': lessons,
-                            'lesson_count': len(lessons),
-                            'complete_count': complete_count,
-                            'total_count': total_count
-                        })
                     else:
-                        self.logger.warning(f"  No lectures found in section {section_idx}")
+                        # Chapter 구조가 없는 경우 - 기존 방식대로 Section 레벨에서 바로 강의 추출
+                        lecture_elements = await section_elem.query_selector_all('.classroom-sidebar-clip__chapter__clip')
+                        lessons = []
+
+                        self.logger.info(f"  Section {section_idx}: {section_title} ({complete_count}/{total_count}) - {len(lecture_elements)} lectures")
+
+                        for lecture_idx, lecture_elem in enumerate(lecture_elements, 1):
+                            try:
+                                # 강의 제목
+                                title_elem = await lecture_elem.query_selector('.classroom-sidebar-clip__chapter__clip__title')
+                                lecture_title = await title_elem.inner_text() if title_elem else f'Lecture {lecture_idx}'
+                                lecture_title = lecture_title.strip()
+
+                                # 강의 시간
+                                time_elem = await lecture_elem.query_selector('.classroom-sidebar-clip__chapter__clip__time')
+                                lecture_duration = await time_elem.inner_text() if time_elem else ''
+                                lecture_duration = lecture_duration.strip()
+
+                                # 완료 여부 확인
+                                class_attr = await lecture_elem.get_attribute('class')
+                                is_completed = 'classroom-sidebar-clip__chapter__clip--complete' in class_attr if class_attr else False
+
+                                lessons.append({
+                                    'title': lecture_title,
+                                    'duration': lecture_duration,
+                                    'is_completed': is_completed
+                                })
+
+                            except Exception as e:
+                                self.logger.warning(f"    Error parsing lecture {lecture_idx}: {e}")
+                                continue
+
+                        if lessons:
+                            curriculum.append({
+                                'section': section_title,
+                                'section_number': section_idx,
+                                'chapters': None,  # No chapters, just lectures directly under section
+                                'lessons': lessons,
+                                'lesson_count': len(lessons),
+                                'complete_count': complete_count,
+                                'total_count': total_count
+                            })
+                        else:
+                            self.logger.warning(f"  No lectures found in section {section_idx}")
 
                 except Exception as e:
                     self.logger.warning(f"  Error parsing section {section_idx}: {e}")

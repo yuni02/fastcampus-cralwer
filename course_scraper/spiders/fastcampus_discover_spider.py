@@ -157,8 +157,8 @@ class FastCampusDiscoverSpider(scrapy.Spider):
 
                 # 내 강의장으로 이동
                 try:
-                    self.logger.info("Navigating to /me/courses...")
-                    await page.goto('https://fastcampus.co.kr/me/courses', wait_until='domcontentloaded')
+                    self.logger.info("Navigating to /me/course...")
+                    await page.goto('https://fastcampus.co.kr/me/course', wait_until='domcontentloaded')
                     await page.wait_for_timeout(2000)
 
                     current_url = page.url
