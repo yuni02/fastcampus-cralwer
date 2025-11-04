@@ -1,8 +1,6 @@
 import scrapy
 import os
-import pymysql
 from scrapy_playwright.page import PageMethod
-from datetime import datetime
 
 # credentials.py에서 로그인 정보 가져오기
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
@@ -10,11 +8,6 @@ credentials_path = os.path.join(project_root, 'credentials.py')
 
 KAKAO_EMAIL = None
 KAKAO_PASSWORD = None
-MYSQL_HOST = 'localhost'
-MYSQL_PORT = 3306
-MYSQL_USER = 'root'
-MYSQL_PASSWORD = ''
-MYSQL_DATABASE = 'crawler'
 
 if os.path.exists(credentials_path):
     with open(credentials_path, 'r', encoding='utf-8') as f:
@@ -22,91 +15,38 @@ if os.path.exists(credentials_path):
         exec(f.read(), exec_globals)
         KAKAO_EMAIL = exec_globals.get('KAKAO_EMAIL')
         KAKAO_PASSWORD = exec_globals.get('KAKAO_PASSWORD')
-        MYSQL_HOST = exec_globals.get('MYSQL_HOST', MYSQL_HOST)
-        MYSQL_PORT = exec_globals.get('MYSQL_PORT', MYSQL_PORT)
-        MYSQL_USER = exec_globals.get('MYSQL_USER', MYSQL_USER)
-        MYSQL_PASSWORD = exec_globals.get('MYSQL_PASSWORD', MYSQL_PASSWORD)
-        MYSQL_DATABASE = exec_globals.get('MYSQL_DATABASE', MYSQL_DATABASE)
 else:
-    raise FileNotFoundError(f"credentials.py not found")
+    raise FileNotFoundError(f"credentials.py not found at {credentials_path}")
 
 if not KAKAO_EMAIL or not KAKAO_PASSWORD:
-    raise ValueError("KAKAO_EMAIL or KAKAO_PASSWORD not set")
+    raise ValueError("KAKAO_EMAIL or KAKAO_PASSWORD not set in credentials.py")
 
 
-class FastCampusDailySpider(scrapy.Spider):
+class FastCampusLecturesSpider(scrapy.Spider):
     """
-    매일 실행: DB에서 강의 URL을 가져와서 진도율과 커리큘럼을 업데이트하는 spider
+    특정 코스 ID를 입력받아 해당 강의의 lectures 목록만 크롤링하는 spider
+
+    사용법:
+    scrapy crawl fastcampus_lectures -a course_id=YOUR_COURSE_ID
     """
-    name = 'fastcampus_daily'
+    name = 'fastcampus_lectures'
     custom_settings = {
         'DOWNLOAD_DELAY': 2,
         'CONCURRENT_REQUESTS_PER_DOMAIN': 2,
     }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, course_id=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.logged_in = False
-        self.course_urls = []
 
-        # 명령줄 옵션
-        self.target_only = kwargs.get('target_only', 'false').lower() == 'true'
-        self.skip_recent = kwargs.get('skip_recent', 'false').lower() == 'true'
-        self.course_id = kwargs.get('course_id', None)
+        if not course_id:
+            raise ValueError("course_id parameter is required! Usage: scrapy crawl fastcampus_lectures -a course_id=YOUR_COURSE_ID")
+
+        self.course_id = course_id
+        self.course_url = f'https://fastcampus.co.kr/classroom/{course_id}'
+        self.logger.info(f"Target course: {self.course_url}")
 
     def start_requests(self):
-        # DB에서 강의 URL 가져오기
-        try:
-            connection = pymysql.connect(
-                host=MYSQL_HOST,
-                port=MYSQL_PORT,
-                user=MYSQL_USER,
-                password=MYSQL_PASSWORD,
-                database=MYSQL_DATABASE,
-                charset='utf8mb4'
-            )
-
-            with connection.cursor() as cursor:
-                # 쿼리 조건 동적 생성
-                conditions = ["url IS NOT NULL"]
-
-                # 기본 조건: is_manually_completed = 1인 강의는 항상 제외
-                conditions.append("(is_manually_completed IS NULL OR is_manually_completed = 0)")
-
-                # 옵션 1: 특정 course_id만 크롤링
-                if self.course_id:
-                    conditions.append(f"course_id = {self.course_id}")
-                    self.logger.info(f"Filtering by course_id: {self.course_id}")
-
-                # 옵션 2: 목표 강의만 크롤링
-                elif self.target_only:
-                    conditions.append("is_target_course = 1")
-                    self.logger.info("Filtering: is_target_course = 1")
-
-                # 옵션 3: 최근 업데이트된 강의 제외 (24시간 이내)
-                if self.skip_recent and not self.course_id:
-                    conditions.append("(updated_at < DATE_SUB(NOW(), INTERVAL 1 DAY) OR updated_at IS NULL)")
-                    self.logger.info("Filtering: skip recently updated courses (< 24h)")
-
-                query = f"SELECT course_id, url FROM courses WHERE {' AND '.join(conditions)}"
-                self.logger.info(f"SQL: {query}")
-
-                cursor.execute(query)
-                rows = cursor.fetchall()
-                self.course_urls = [{'course_id': row[0], 'url': row[1]} for row in rows]
-
-            connection.close()
-            self.logger.info(f"✓ Loaded {len(self.course_urls)} course URLs from DB")
-
-        except Exception as e:
-            self.logger.error(f"Failed to load URLs from DB: {e}")
-            return
-
-        if not self.course_urls:
-            self.logger.warning("No course URLs found in DB. Run fastcampus_discover first.")
-            return
-
-        # 로그인 시작
         yield scrapy.Request(
             'https://fastcampus.co.kr/account/sign-in',
             callback=self.login,
@@ -132,6 +72,7 @@ class FastCampusDailySpider(scrapy.Spider):
             selectors = [
                 'button:has-text("카카오로 1초 만에 시작하기")',
                 'button:has-text("카카오")',
+                'a:has-text("카카오로 1초 만에 시작하기")',
                 '[class*="kakao"]',
             ]
 
@@ -224,24 +165,21 @@ class FastCampusDailySpider(scrapy.Spider):
                 # 페이지 닫기
                 await page.close()
 
-                # 각 강의 URL을 크롤링
-                self.logger.info(f"Starting to crawl {len(self.course_urls)} courses...")
-
-                for course_data in self.course_urls:
-                    url = course_data['url']
-                    yield scrapy.Request(
-                        url,
-                        callback=self.parse,
-                        meta={
-                            'playwright': True,
-                            'playwright_include_page': True,
-                            'playwright_page_methods': [
-                                PageMethod('wait_for_timeout', 3000),
-                            ],
-                        },
-                        errback=self.errback,
-                        dont_filter=True
-                    )
+                # 특정 코스 URL로 크롤링 요청
+                self.logger.info(f"Starting to crawl course: {self.course_url}")
+                yield scrapy.Request(
+                    self.course_url,
+                    callback=self.parse,
+                    meta={
+                        'playwright': True,
+                        'playwright_include_page': True,
+                        'playwright_page_methods': [
+                            PageMethod('wait_for_timeout', 3000),
+                        ],
+                    },
+                    errback=self.errback,
+                    dont_filter=True
+                )
             else:
                 self.logger.error("✗ Login failed!")
                 await page.close()
@@ -338,7 +276,7 @@ class FastCampusDailySpider(scrapy.Spider):
                 except Exception as e:
                     self.logger.warning(f"Could not extract time info: {str(e)[:100]}")
 
-            # CourseItem 생성 (courses 테이블 업데이트용)
+            # CourseItem 생성
             from course_scraper.items import CourseItem
             course_item = CourseItem(
                 course_id=course_id,
@@ -450,7 +388,6 @@ class FastCampusDailySpider(scrapy.Spider):
             self.logger.info("STEP 1: Finding ALL accordion headers with arrow icons...")
             self.logger.info("=" * 80)
 
-            # .common-accordion-menu__header__arrow-icon이 있는 모든 헤더 찾기
             all_headers = await page.query_selector_all('.common-accordion-menu__header')
             self.logger.info(f"Found {len(all_headers)} total accordion headers")
 
@@ -462,12 +399,10 @@ class FastCampusDailySpider(scrapy.Spider):
             opened_count = 0
             for idx, header in enumerate(all_headers, 1):
                 try:
-                    # 아이콘이 있는지 확인
                     arrow_icon = await header.query_selector('.common-accordion-menu__header__arrow-icon')
                     if not arrow_icon:
                         continue
 
-                    # 부모 메뉴 찾기
                     parent_menu = await header.evaluate_handle('el => el.closest(".common-accordion-menu")')
                     if parent_menu:
                         parent_menu_elem = parent_menu.as_element()
@@ -475,22 +410,17 @@ class FastCampusDailySpider(scrapy.Spider):
                         is_open = 'common-accordion-menu--open' in class_attr if class_attr else False
 
                         if not is_open:
-                            # 화면에 보이도록 스크롤
                             await header.scroll_into_view_if_needed()
                             await page.wait_for_timeout(300)
-
-                            # 클릭
                             await header.click()
-                            await page.wait_for_timeout(800)  # 애니메이션 대기
+                            await page.wait_for_timeout(800)
 
-                            # 열렸는지 확인
                             class_attr_after = await parent_menu_elem.get_attribute('class')
                             if 'common-accordion-menu--open' in class_attr_after:
                                 opened_count += 1
                                 if opened_count % 5 == 0:
                                     self.logger.info(f"  Opened {opened_count} sections so far...")
                             else:
-                                # 재시도
                                 await page.wait_for_timeout(300)
                                 await header.click()
                                 await page.wait_for_timeout(800)
@@ -510,7 +440,6 @@ class FastCampusDailySpider(scrapy.Spider):
 
             await page.wait_for_timeout(2000)
 
-            # 다시 한번 모든 헤더 찾기 (새로 나타난 것들 포함)
             all_headers_again = await page.query_selector_all('.common-accordion-menu__header')
             self.logger.info(f"Found {len(all_headers_again)} headers on second pass")
 
@@ -540,7 +469,6 @@ class FastCampusDailySpider(scrapy.Spider):
             if additional_opened > 0:
                 self.logger.info(f"✓ Opened {additional_opened} additional sections on second pass")
 
-            # 모든 섹션이 열린 후 충분히 대기
             await page.wait_for_timeout(3000)
 
             self.logger.info("=" * 80)
@@ -563,14 +491,9 @@ class FastCampusDailySpider(scrapy.Spider):
                     complete_count = int(await complete_elem.inner_text()) if complete_elem else 0
                     total_count = int(await total_elem.inner_text()) if total_elem else 0
 
-                    # 섹션 총 시간
-                    playtime_elem = await section_elem.query_selector('.classroom-sidebar-clip__chapter__clip-playtime')
-                    section_playtime = await playtime_elem.inner_text() if playtime_elem else ''
-
-                    # Chapter들을 찾기 (.classroom-sidebar-clip__chapter__part__title)
+                    # Chapter들을 찾기
                     chapter_elements = await section_elem.query_selector_all('.classroom-sidebar-clip__chapter__part__title')
 
-                    # Chapter가 있으면 Chapter별로 강의를 그룹화, 없으면 Section 레벨에서 바로 강의 추출
                     if chapter_elements and len(chapter_elements) > 0:
                         # Chapter 구조가 있는 경우
                         self.logger.info(f"  Section {section_idx}: {section_title} (has {len(chapter_elements)} chapters)")
@@ -581,8 +504,6 @@ class FastCampusDailySpider(scrapy.Spider):
                                 chapter_title = await chapter_title_elem.inner_text() if chapter_title_elem else f'Chapter {chapter_idx}'
                                 chapter_title = chapter_title.strip()
 
-                                # 이 Chapter의 강의들 찾기
-                                # chapter_title_elem의 부모에서 강의들 찾기
                                 chapter_parent = await chapter_title_elem.evaluate_handle('el => el.closest(".classroom-sidebar-clip__chapter__part")')
                                 if chapter_parent:
                                     chapter_parent_elem = chapter_parent.as_element()
@@ -593,17 +514,14 @@ class FastCampusDailySpider(scrapy.Spider):
                                 lessons = []
                                 for lecture_idx, lecture_elem in enumerate(lecture_elements, 1):
                                     try:
-                                        # 강의 제목
                                         title_elem = await lecture_elem.query_selector('.classroom-sidebar-clip__chapter__clip__title')
                                         lecture_title = await title_elem.inner_text() if title_elem else f'Lecture {lecture_idx}'
                                         lecture_title = lecture_title.strip()
 
-                                        # 강의 시간
                                         time_elem = await lecture_elem.query_selector('.classroom-sidebar-clip__chapter__clip__time')
                                         lecture_duration = await time_elem.inner_text() if time_elem else ''
                                         lecture_duration = lecture_duration.strip()
 
-                                        # 완료 여부 확인
                                         class_attr = await lecture_elem.get_attribute('class')
                                         is_completed = 'classroom-sidebar-clip__chapter__clip--complete' in class_attr if class_attr else False
 
@@ -639,7 +557,7 @@ class FastCampusDailySpider(scrapy.Spider):
                             })
 
                     else:
-                        # Chapter 구조가 없는 경우 - 기존 방식대로 Section 레벨에서 바로 강의 추출
+                        # Chapter 구조가 없는 경우
                         lecture_elements = await section_elem.query_selector_all('.classroom-sidebar-clip__chapter__clip')
                         lessons = []
 
@@ -647,17 +565,14 @@ class FastCampusDailySpider(scrapy.Spider):
 
                         for lecture_idx, lecture_elem in enumerate(lecture_elements, 1):
                             try:
-                                # 강의 제목
                                 title_elem = await lecture_elem.query_selector('.classroom-sidebar-clip__chapter__clip__title')
                                 lecture_title = await title_elem.inner_text() if title_elem else f'Lecture {lecture_idx}'
                                 lecture_title = lecture_title.strip()
 
-                                # 강의 시간
                                 time_elem = await lecture_elem.query_selector('.classroom-sidebar-clip__chapter__clip__time')
                                 lecture_duration = await time_elem.inner_text() if time_elem else ''
                                 lecture_duration = lecture_duration.strip()
 
-                                # 완료 여부 확인
                                 class_attr = await lecture_elem.get_attribute('class')
                                 is_completed = 'classroom-sidebar-clip__chapter__clip--complete' in class_attr if class_attr else False
 
@@ -675,7 +590,7 @@ class FastCampusDailySpider(scrapy.Spider):
                             curriculum.append({
                                 'section': section_title,
                                 'section_number': section_idx,
-                                'chapters': None,  # No chapters, just lectures directly under section
+                                'chapters': None,
                                 'lessons': lessons,
                                 'lesson_count': len(lessons),
                                 'complete_count': complete_count,

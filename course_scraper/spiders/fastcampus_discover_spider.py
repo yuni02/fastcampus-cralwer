@@ -25,6 +25,10 @@ if not KAKAO_EMAIL or not KAKAO_PASSWORD:
 class FastCampusDiscoverSpider(scrapy.Spider):
     """
     월 1회 실행: 새로운 강의를 찾아서 courses 테이블에 저장하는 spider
+
+    사용법:
+    1. 모든 강의 수집: scrapy crawl fastcampus_discover
+    2. 특정 강의만 수집: scrapy crawl fastcampus_discover -a course_ids="214390,246575,123456"
     """
     name = 'fastcampus_discover'
     custom_settings = {
@@ -32,9 +36,17 @@ class FastCampusDiscoverSpider(scrapy.Spider):
         'CONCURRENT_REQUESTS_PER_DOMAIN': 2,
     }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, course_ids=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.logged_in = False
+
+        # course_ids 파라미터 처리
+        if course_ids:
+            # 쉼표로 구분된 문자열을 리스트로 변환
+            self.target_course_ids = set(course_ids.strip().split(','))
+            self.logger.info(f"Target course IDs: {self.target_course_ids}")
+        else:
+            self.target_course_ids = None
 
     def start_requests(self):
         yield scrapy.Request(
@@ -155,7 +167,30 @@ class FastCampusDiscoverSpider(scrapy.Spider):
                 self.logged_in = True
                 await page.wait_for_timeout(1000)
 
-                # 내 강의장으로 이동
+                # course_ids가 지정된 경우 URL 직접 생성 (빠른 모드)
+                if self.target_course_ids:
+                    self.logger.info(f"Fast mode: Creating URLs directly for {len(self.target_course_ids)} courses")
+                    await page.close()
+
+                    from course_scraper.items import CourseItem
+                    for idx, course_id in enumerate(self.target_course_ids, start=1):
+                        url = f'https://fastcampus.co.kr/classroom/{course_id}'
+                        self.logger.info(f"  {idx}. Creating URL for course_id: {course_id}")
+
+                        course_item = CourseItem(
+                            course_id=course_id,
+                            course_title=f'Course {course_id}',  # placeholder
+                            progress_rate=0.0,
+                            study_time=0,
+                            total_lecture_time=0,
+                            url=url
+                        )
+                        yield course_item
+
+                    self.logger.info(f"✓ Created {len(self.target_course_ids)} course items")
+                    return
+
+                # 내 강의장으로 이동 (course_ids가 없는 경우만)
                 try:
                     self.logger.info("Navigating to /me/course...")
                     await page.goto('https://fastcampus.co.kr/me/course', wait_until='domcontentloaded')
@@ -296,6 +331,26 @@ class FastCampusDiscoverSpider(scrapy.Spider):
 
                     self.logger.info(f"✓ Found {len(course_urls)} total course URLs")
 
+                    # 특정 course_ids가 지정된 경우 필터링
+                    if self.target_course_ids:
+                        filtered_urls = []
+                        for url in course_urls:
+                            course_id = url.split('/classroom/')[-1].split('?')[0]
+                            if course_id in self.target_course_ids:
+                                filtered_urls.append(url)
+                                self.logger.info(f"✓ Matched target course: {course_id}")
+                            else:
+                                self.logger.debug(f"  Skipping non-target course: {course_id}")
+
+                        self.logger.info(f"✓ Filtered to {len(filtered_urls)} target courses (from {len(course_urls)} total)")
+                        course_urls = filtered_urls
+
+                        # 매칭되지 않은 course_id가 있으면 경고
+                        found_ids = {url.split('/classroom/')[-1].split('?')[0] for url in course_urls}
+                        not_found = self.target_course_ids - found_ids
+                        if not_found:
+                            self.logger.warning(f"⚠️  Target course IDs not found: {not_found}")
+
                     # courses 테이블에 저장할 아이템 생성
                     from course_scraper.items import CourseItem
 
@@ -309,8 +364,7 @@ class FastCampusDiscoverSpider(scrapy.Spider):
                             progress_rate=0.0,
                             study_time=0,
                             total_lecture_time=0,
-                            url=url,
-                            display_order=idx  # 강의 표시 순서 저장
+                            url=url
                         )
                         yield course_item
 

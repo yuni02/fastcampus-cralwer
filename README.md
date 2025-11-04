@@ -96,10 +96,16 @@ scrapy crawl fastcampus_daily
 ### Spider 종류별 사용 방법
 
 #### 1. `fastcampus_discover` (월 1회 실행)
-새로운 강의 URL 발견 및 DB 저장
+새로운 강의 URL 발견 및 DB 저장 (**URL만 저장, 강의 정보는 저장 안함**)
 ```bash
+# 모든 강의 수집
 scrapy crawl fastcampus_discover
+
+# 특정 강의만 수집 (쉼표로 구분)
+scrapy crawl fastcampus_discover -a course_ids="214390,246575,123456"
 ```
+
+**⚠️ 중요**: 이 spider는 **course_id와 URL만** DB에 저장합니다. 강의 제목, 진도율, lectures 등의 실제 크롤링 정보는 `fastcampus_daily` 또는 `fastcampus_lectures`로 수집해야 합니다.
 
 #### 2. `fastcampus_daily` (매일 실행, 추천)
 DB에 있는 강의들의 진도율/커리큘럼 업데이트
@@ -126,7 +132,28 @@ scrapy crawl fastcampus_daily -a target_only=true -a skip_recent=true
 scrapy crawl fastcampus
 ```
 
-#### 4. `fastcampus_test` (테스트용)
+#### 4. `fastcampus_lectures` (특정 강의만 크롤링)
+특정 코스 ID를 입력하여 해당 강의의 lectures 목록만 크롤링
+```bash
+# course_id를 반드시 입력해야 함
+scrapy crawl fastcampus_lectures -a course_id=YOUR_COURSE_ID
+
+# 예시
+scrapy crawl fastcampus_lectures -a course_id=214390
+```
+
+**사용 시나리오**:
+- 특정 강의의 lectures 정보만 빠르게 수집하고 싶을 때
+- 새로 구매한 강의의 커리큘럼을 확인하고 싶을 때
+- 특정 강의의 섹션/챕터 구조를 분석하고 싶을 때
+
+**특징**:
+- course_id만 입력하면 자동으로 해당 강의 페이지로 이동
+- 강의 기본 정보 (제목, 진도율, 수강시간 등) 수집
+- 모든 섹션/챕터를 자동으로 펼쳐서 전체 lectures 목록 수집
+- DB에 자동 저장 (CourseItem + LectureItem)
+
+#### 5. `fastcampus_test` (테스트용)
 특정 강의 하나만 테스트
 ```bash
 scrapy crawl fastcampus_test
@@ -134,13 +161,33 @@ scrapy crawl fastcampus_test
 
 ### 추천 실행 순서 (처음이라면)
 
+#### 방법 1: 전체 강의 자동 수집 (추천)
 ```bash
-# 1단계: 먼저 강의 목록 수집 (처음 1회만)
+# 1단계: 먼저 강의 URL 목록 수집 (처음 1회만)
 scrapy crawl fastcampus_discover
 
-# 2단계: 매일 진도 업데이트
+# 2단계: 매일 진도 업데이트 (강의 정보 + lectures 크롤링)
 scrapy crawl fastcampus_daily
 ```
+
+#### 방법 2: 특정 강의만 빠르게 수집
+```bash
+# 옵션 A: URL 저장 후 크롤링 (2단계)
+scrapy crawl fastcampus_discover -a course_ids="246575"
+scrapy crawl fastcampus_daily -a course_id=246575
+
+# 옵션 B: 바로 크롤링 (1단계, 더 빠름)
+scrapy crawl fastcampus_lectures -a course_id=246575
+```
+
+### Spider 비교표
+
+| Spider | 목적 | 저장 내용 | 사용 시기 |
+|--------|------|----------|----------|
+| `fastcampus_discover` | URL 발견 | course_id, url (기본 정보만) | 월 1회 또는 새 강의 추가 시 |
+| `fastcampus_daily` | 진도 업데이트 | 제목, 진도율, 수강시간, lectures | 매일 또는 진도 확인할 때 |
+| `fastcampus_lectures` | 개별 크롤링 | 제목, 진도율, 수강시간, lectures | 특정 강의 1개만 빠르게 수집 |
+| `fastcampus` | 전체 크롤링 | 모든 정보 (URL + 크롤링) | 처음 1회 전체 수집 시 |
 
 ### 기타 유용한 옵션
 
@@ -151,6 +198,51 @@ scrapy crawl fastcampus_daily -o output.json
 # 로그 레벨 조정
 scrapy crawl fastcampus_daily -L INFO
 scrapy crawl fastcampus_daily -L ERROR
+```
+
+### fastcampus_discover 필터링 옵션 상세 설명
+
+`fastcampus_discover` spider는 특정 강의만 선택적으로 수집할 수 있는 옵션을 제공합니다:
+
+#### `course_ids` 옵션
+**용도**: 특정 강의만 DB에 추가
+
+**사용 시나리오**:
+- 새로 구매한 강의 몇 개만 빠르게 DB에 추가하고 싶을 때
+- 특정 강의의 URL이 변경되어 재수집이 필요할 때
+- 전체 크롤링은 시간이 오래 걸려서 일부만 먼저 처리하고 싶을 때
+
+**실행 예시**:
+```bash
+# 하나의 강의만 수집
+scrapy crawl fastcampus_discover -a course_ids="214390"
+
+# 여러 강의 수집 (쉼표로 구분)
+scrapy crawl fastcampus_discover -a course_ids="214390,246575,123456"
+
+# 공백이 있어도 작동 (따옴표 안에서)
+scrapy crawl fastcampus_discover -a course_ids="214390, 246575, 123456"
+```
+
+**동작 방식**:
+
+**빠른 모드** (`course_ids` 지정 시):
+1. 로그인만 수행
+2. 강의 목록 페이지 이동 건너뛰기
+3. 지정된 course_id로 URL 직접 생성 (`https://fastcampus.co.kr/classroom/{course_id}`)
+4. CourseItem 즉시 생성 및 DB 저장
+5. ✅ **몇 초 안에 완료!**
+
+**일반 모드** (`course_ids` 없을 때):
+1. 로그인 후 내 강의장으로 이동
+2. 모든 강의 박스를 열어서 URL 수집 (시간 소요)
+3. 수집된 모든 강의를 DB에 저장
+
+**강의 ID 확인 방법**:
+- 강의 URL에서 확인: `https://fastcampus.co.kr/classroom/214390` → course_id = `214390`
+- 또는 DB 조회:
+```sql
+SELECT course_id, course_title, url FROM courses;
 ```
 
 ### fastcampus_daily 필터링 옵션 상세 설명
@@ -244,7 +336,11 @@ fastcampus-scrapping/
 │       ├── pipelines.py        # MySQL 파이프라인
 │       ├── middlewares.py      # 미들웨어
 │       └── spiders/            # 스파이더
-│           ├── fastcampus_spider.py
+│           ├── fastcampus_discover_spider.py   # 강의 URL 발견
+│           ├── fastcampus_daily_spider.py      # 매일 업데이트
+│           ├── fastcampus_lectures_spider.py   # 특정 강의 크롤링
+│           ├── fastcampus_spider.py            # 전체 크롤링
+│           ├── fastcampus_test_spider.py       # 테스트용
 │           ├── inflearn_spider.py
 │           └── udemy_spider.py
 ├── credentials.py              # 로그인 정보 (git에 업로드 안됨)

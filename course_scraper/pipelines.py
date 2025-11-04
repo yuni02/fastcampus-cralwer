@@ -59,6 +59,7 @@ class MySQLPipeline:
             logging.info("MySQL connection closed")
 
     def process_item(self, item, spider):
+        print('item', item)
         """아이템 처리 및 DB 저장"""
         from course_scraper.items import CourseItem, LectureItem
 
@@ -111,32 +112,59 @@ class MySQLPipeline:
 
     def save_course(self, course_id, item):
         """강의 정보 저장 (UPSERT)"""
-        sql = """
-            INSERT INTO courses (
-                course_id, course_title, progress_rate, study_time,
-                total_lecture_time, url, display_order
-            ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s
-            )
-            ON DUPLICATE KEY UPDATE
-                course_title = VALUES(course_title),
-                progress_rate = VALUES(progress_rate),
-                study_time = VALUES(study_time),
-                total_lecture_time = VALUES(total_lecture_time),
-                url = VALUES(url),
-                display_order = VALUES(display_order),
-                updated_at = CURRENT_TIMESTAMP
-        """
+        # display_order가 있는지 확인
+        has_display_order = item.get('display_order') is not None
 
-        values = (
-            course_id,
-            item.get('course_title', 'Unknown Title'),
-            item.get('progress_rate'),
-            item.get('study_time'),
-            item.get('total_lecture_time'),
-            item.get('url', ''),
-            item.get('display_order')
-        )
+        if has_display_order:
+            sql = """
+                INSERT INTO courses (
+                    course_id, course_title, progress_rate, study_time,
+                    total_lecture_time, url, display_order
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s
+                )
+                ON DUPLICATE KEY UPDATE
+                    course_title = VALUES(course_title),
+                    progress_rate = VALUES(progress_rate),
+                    study_time = VALUES(study_time),
+                    total_lecture_time = VALUES(total_lecture_time),
+                    url = VALUES(url),
+                    display_order = VALUES(display_order),
+                    updated_at = CURRENT_TIMESTAMP
+            """
+            values = (
+                course_id,
+                item.get('course_title', 'Unknown Title'),
+                item.get('progress_rate'),
+                item.get('study_time'),
+                item.get('total_lecture_time'),
+                item.get('url', ''),
+                item.get('display_order')
+            )
+        else:
+            sql = """
+                INSERT INTO courses (
+                    course_id, course_title, progress_rate, study_time,
+                    total_lecture_time, url
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s
+                )
+                ON DUPLICATE KEY UPDATE
+                    course_title = VALUES(course_title),
+                    progress_rate = VALUES(progress_rate),
+                    study_time = VALUES(study_time),
+                    total_lecture_time = VALUES(total_lecture_time),
+                    url = VALUES(url),
+                    updated_at = CURRENT_TIMESTAMP
+            """
+            values = (
+                course_id,
+                item.get('course_title', 'Unknown Title'),
+                item.get('progress_rate'),
+                item.get('study_time'),
+                item.get('total_lecture_time'),
+                item.get('url', '')
+            )
 
         self.cursor.execute(sql, values)
 

@@ -401,22 +401,93 @@ class FastCampusSpider(scrapy.Spider):
 
                 # 가져온 강의 URL들을 크롤링
                 if hasattr(self, 'course_urls_to_crawl') and self.course_urls_to_crawl:
-                    self.logger.info(f"Starting to crawl {len(self.course_urls_to_crawl)} courses...")
+                    # DB에서 is_manually_completed 확인하여 완료된 강의 제외
+                    try:
+                        import pymysql
+                        # credentials에서 DB 정보 가져오기
+                        project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+                        credentials_path = os.path.join(project_root, 'credentials.py')
 
-                    for url in self.course_urls_to_crawl:
-                        yield scrapy.Request(
-                            url,
-                            callback=self.parse,
-                            meta={
-                                'playwright': True,
-                                'playwright_include_page': True,
-                                'playwright_page_methods': [
-                                    PageMethod('wait_for_timeout', 3000),
-                                ],
-                            },
-                            errback=self.errback,
-                            dont_filter=True
+                        MYSQL_HOST = 'localhost'
+                        MYSQL_PORT = 3306
+                        MYSQL_USER = 'root'
+                        MYSQL_PASSWORD = ''
+                        MYSQL_DATABASE = 'crawler'
+
+                        if os.path.exists(credentials_path):
+                            with open(credentials_path, 'r', encoding='utf-8') as f:
+                                exec_globals = {}
+                                exec(f.read(), exec_globals)
+                                MYSQL_HOST = exec_globals.get('MYSQL_HOST', MYSQL_HOST)
+                                MYSQL_PORT = exec_globals.get('MYSQL_PORT', MYSQL_PORT)
+                                MYSQL_USER = exec_globals.get('MYSQL_USER', MYSQL_USER)
+                                MYSQL_PASSWORD = exec_globals.get('MYSQL_PASSWORD', MYSQL_PASSWORD)
+                                MYSQL_DATABASE = exec_globals.get('MYSQL_DATABASE', MYSQL_DATABASE)
+
+                        connection = pymysql.connect(
+                            host=MYSQL_HOST,
+                            port=MYSQL_PORT,
+                            user=MYSQL_USER,
+                            password=MYSQL_PASSWORD,
+                            database=MYSQL_DATABASE,
+                            charset='utf8mb4'
                         )
+
+                        with connection.cursor() as cursor:
+                            # course_id 리스트 생성
+                            course_ids = [url.split('/classroom/')[-1].split('?')[0] for url in self.course_urls_to_crawl]
+                            course_ids_str = ','.join([f"'{cid}'" for cid in course_ids])
+
+                            # is_manually_completed = 1인 강의 조회
+                            query = f"SELECT course_id FROM courses WHERE course_id IN ({course_ids_str}) AND is_manually_completed = 1"
+                            cursor.execute(query)
+                            completed_course_ids = {row[0] for row in cursor.fetchall()}
+
+                        connection.close()
+
+                        # is_manually_completed = 1인 강의 제외
+                        filtered_urls = []
+                        for url in self.course_urls_to_crawl:
+                            course_id = url.split('/classroom/')[-1].split('?')[0]
+                            if course_id in completed_course_ids:
+                                self.logger.info(f"⏭️  Skipping manually completed course: {course_id}")
+                            else:
+                                filtered_urls.append(url)
+
+                        self.logger.info(f"Starting to crawl {len(filtered_urls)} courses (excluded {len(self.course_urls_to_crawl) - len(filtered_urls)} manually completed courses)")
+
+                        for url in filtered_urls:
+                            yield scrapy.Request(
+                                url,
+                                callback=self.parse,
+                                meta={
+                                    'playwright': True,
+                                    'playwright_include_page': True,
+                                    'playwright_page_methods': [
+                                        PageMethod('wait_for_timeout', 3000),
+                                    ],
+                                },
+                                errback=self.errback,
+                                dont_filter=True
+                            )
+                    except Exception as e:
+                        self.logger.error(f"Error filtering courses: {e}")
+                        # 에러 시 필터링 없이 모두 크롤링
+                        self.logger.info(f"Starting to crawl {len(self.course_urls_to_crawl)} courses...")
+                        for url in self.course_urls_to_crawl:
+                            yield scrapy.Request(
+                                url,
+                                callback=self.parse,
+                                meta={
+                                    'playwright': True,
+                                    'playwright_include_page': True,
+                                    'playwright_page_methods': [
+                                        PageMethod('wait_for_timeout', 3000),
+                                    ],
+                                },
+                                errback=self.errback,
+                                dont_filter=True
+                            )
                 else:
                     self.logger.warning("No course URLs found to crawl")
             else:
