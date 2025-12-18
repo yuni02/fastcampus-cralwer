@@ -132,7 +132,7 @@ DOWNLOAD_HANDLERS = {
 
 PLAYWRIGHT_BROWSER_TYPE = "chromium"
 PLAYWRIGHT_LAUNCH_OPTIONS = {
-    "headless": False,  # 2단계 인증을 위해 브라우저 표시
+    "headless": True,  # 서버에서는 headless 모드로 실행
     "timeout": 120000,  # 브라우저 시작 타임아웃 2분
 }
 
