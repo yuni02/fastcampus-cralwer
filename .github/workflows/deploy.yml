@@ -17,12 +17,24 @@ jobs:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
-          port: ${{ secrets.SERVER_PORT || 22 }}
+          port: ${{ secrets.SERVER_PORT }}
           script: |
             cd ${{ secrets.PROJECT_PATH }}
 
             # 최신 코드 pull
             git pull origin main
+
+            # credentials.py 생성 (GitHub Secrets에서)
+            cat > credentials.py << 'EOF'
+            MYSQL_HOST = '${{ secrets.MYSQL_HOST }}'
+            MYSQL_PORT = ${{ secrets.MYSQL_PORT }}
+            MYSQL_USER = '${{ secrets.MYSQL_USER }}'
+            MYSQL_PASSWORD = '${{ secrets.MYSQL_PASSWORD }}'
+            MYSQL_DATABASE = '${{ secrets.MYSQL_DATABASE }}'
+
+            KAKAO_EMAIL = '${{ secrets.KAKAO_EMAIL }}'
+            KAKAO_PASSWORD = '${{ secrets.KAKAO_PASSWORD }}'
+            EOF
 
             # Docker 컨테이너 재빌드 및 실행
             docker-compose down
