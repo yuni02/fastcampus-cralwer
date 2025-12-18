@@ -12,6 +12,7 @@ credentials_path = os.path.join(project_root, 'credentials.py')
 KAKAO_EMAIL = None
 KAKAO_PASSWORD = None
 
+
 if os.path.exists(credentials_path):
     with open(credentials_path, 'r', encoding='utf-8') as f:
         exec_globals = {}
