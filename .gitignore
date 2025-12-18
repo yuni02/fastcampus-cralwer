@@ -48,7 +48,10 @@ wheels/
 # Screenshots & Debug files
 *.png
 *.html
-*.txt
+# *.txt  # 주석처리 - requirements.txt 필요
+
+# requirements.txt는 포함해야 함
+!requirements.txt
 
 # OS
 .DS_Store
