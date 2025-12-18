@@ -86,6 +86,8 @@ USE crawler;
 # 1. 가상환경 활성화
 source .venv/bin/activate
 
+echo $VIRTUAL_ENV 
+
 # 2. course_scraper 디렉토리로 이동
 cd course_scraper
 

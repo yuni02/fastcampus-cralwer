@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  crawler-api:
+    build: .
+    container_name: course-crawler-api
+    ports:
+      - "8000:8000"
+    environment:
+      # MySQL 설정 (서버의 MySQL에 맞게 수정)
+      - MYSQL_HOST=${MYSQL_HOST:-host.docker.internal}
+      - MYSQL_PORT=${MYSQL_PORT:-3306}
+      - MYSQL_USER=${MYSQL_USER:-root}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-crawler}
+      # 카카오 로그인 정보
+      - KAKAO_EMAIL=${KAKAO_EMAIL:-}
+      - KAKAO_PASSWORD=${KAKAO_PASSWORD:-}
+    volumes:
+      # credentials.py 마운트 (로컬 파일 사용 시)
+      - ./credentials.py:/app/credentials.py:ro
+      # 크롤링 결과 저장 (output 파일들)
+      - ./output:/app/output
+      # 스크린샷 저장
+      - ./screenshots:/app/screenshots
+    restart: unless-stopped
+    # Mac/Windows에서 host.docker.internal 사용을 위해
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # 헬스체크
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # MySQL도 Docker로 띄우려면 아래 주석 해제
+  # mysql:
+  #   image: mysql:8.0
+  #   container_name: course-crawler-mysql
+  #   environment:
+  #     - MYSQL_ROOT_PASSWORD=${MYSQL_PASSWORD:-password}
+  #     - MYSQL_DATABASE=${MYSQL_DATABASE:-crawler}
+  #   ports:
+  #     - "3306:3306"
+  #   volumes:
+  #     - mysql_data:/var/lib/mysql
+  #   restart: unless-stopped
+
+# volumes:
+#   mysql_data:
