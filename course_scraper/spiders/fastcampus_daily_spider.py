@@ -273,26 +273,71 @@ class FastCampusDailySpider(scrapy.Spider):
             # Course ID 추출
             course_id = response.url.split('/classroom/')[-1].split('?')[0]
 
-            # 강의 제목 추출
+            # 강의 제목 추출 - 여러 방법 시도
             course_title = None
+            self.logger.info(f"Page title for extraction: {page_title}")
+
+            # 방법 1: 페이지 타이틀에서 추출 (패스트캠퍼스 온라인 강의 - {제목} 형식)
             if ' - ' in page_title:
                 course_title = page_title.split(' - ', 1)[1].strip()
+                self.logger.info(f"Title from page title (split by ' - '): {course_title}")
             elif '|' in page_title:
                 course_title = page_title.split('|')[0].strip()
+                self.logger.info(f"Title from page title (split by '|'): {course_title}")
 
-            if not course_title or len(course_title) < 10:
+            # 방법 2: 페이지에서 직접 제목 요소 찾기
+            if not course_title or len(course_title) < 5:
                 if page:
                     try:
-                        title_elem = await page.query_selector('header h1, h1')
-                        if title_elem:
-                            title_text = await title_elem.inner_text()
-                            if title_text and len(title_text) > 10:
-                                course_title = title_text.strip()
-                    except:
-                        pass
+                        # 사이드바 헤더의 강의 제목
+                        title_selectors = [
+                            '.classroom-sidebar-clip__header__title',
+                            '.classroom-header__title',
+                            '.course-title',
+                            'header h1',
+                            'h1.title',
+                            'h1'
+                        ]
+                        for selector in title_selectors:
+                            try:
+                                title_elem = await page.query_selector(selector)
+                                if title_elem:
+                                    title_text = await title_elem.inner_text()
+                                    if title_text and len(title_text.strip()) >= 5:
+                                        course_title = title_text.strip()
+                                        self.logger.info(f"Title from selector '{selector}': {course_title}")
+                                        break
+                            except:
+                                continue
+                    except Exception as e:
+                        self.logger.warning(f"Could not extract title from page elements: {e}")
 
+            # 방법 3: DB에서 기존 제목 가져오기 (이미 저장된 제목이 있다면)
+            if not course_title or len(course_title) < 5 or course_title.startswith('Course '):
+                try:
+                    import pymysql
+                    connection = pymysql.connect(
+                        host=MYSQL_HOST,
+                        port=MYSQL_PORT,
+                        user=MYSQL_USER,
+                        password=MYSQL_PASSWORD,
+                        database=MYSQL_DATABASE,
+                        charset='utf8mb4'
+                    )
+                    with connection.cursor() as cursor:
+                        cursor.execute("SELECT course_title FROM courses WHERE course_id = %s", (course_id,))
+                        row = cursor.fetchone()
+                        if row and row[0] and not row[0].startswith('Course '):
+                            course_title = row[0]
+                            self.logger.info(f"Title from DB: {course_title}")
+                    connection.close()
+                except Exception as e:
+                    self.logger.warning(f"Could not get title from DB: {e}")
+
+            # 최종 폴백
             if not course_title or len(course_title) < 5:
                 course_title = f'Course {course_id}'
+                self.logger.warning(f"Using fallback title: {course_title}")
 
             course_title = course_title.strip()
             self.logger.info(f"Course: {course_title}")
