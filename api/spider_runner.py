@@ -43,9 +43,21 @@ def run_spider(
         if url:
             cmd.extend(["-a", f"url={url}"])
 
-        # course_ids가 지정된 경우
+        # course_ids 처리 - 스파이더별로 다르게 처리
         if course_ids:
-            cmd.extend(["-a", f"course_ids={','.join(course_ids)}"])
+            if spider_name == "fastcampus_lectures":
+                # fastcampus_lectures는 course_id (단수)를 받음
+                # 배열의 첫 번째 요소만 사용
+                cmd.extend(["-a", f"course_id={course_ids[0]}"])
+            elif spider_name == "fastcampus_daily":
+                # fastcampus_daily는 course_id (단수)도 받을 수 있음
+                if len(course_ids) == 1:
+                    cmd.extend(["-a", f"course_id={course_ids[0]}"])
+                else:
+                    cmd.extend(["-a", f"course_ids={','.join(course_ids)}"])
+            else:
+                # 다른 스파이더는 course_ids (복수)로 전달
+                cmd.extend(["-a", f"course_ids={','.join(course_ids)}"])
 
         # 출력 파일이 지정된 경우
         if output_file:
