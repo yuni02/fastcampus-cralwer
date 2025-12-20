@@ -22,6 +22,14 @@ from .paths import (
     DEBUG_DIR,
     OUTPUT_DIR,
 )
+from .cookies import (
+    save_cookies,
+    load_cookies,
+    delete_cookies,
+    are_cookies_valid,
+    apply_cookies_to_context,
+    save_cookies_from_context,
+)
 
 __all__ = [
     'get_credentials',
@@ -45,4 +53,10 @@ __all__ = [
     'LOGS_DIR',
     'DEBUG_DIR',
     'OUTPUT_DIR',
+    'save_cookies',
+    'load_cookies',
+    'delete_cookies',
+    'are_cookies_valid',
+    'apply_cookies_to_context',
+    'save_cookies_from_context',
 ]

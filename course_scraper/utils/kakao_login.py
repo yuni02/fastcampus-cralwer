@@ -6,6 +6,7 @@ from typing import Optional, Callable, Any
 
 from .credentials import get_kakao_credentials
 from .paths import get_screenshot_path
+from .cookies import load_cookies, save_cookies, delete_cookies
 
 logger = logging.getLogger(__name__)
 
@@ -213,6 +214,8 @@ class KakaoLoginHelper:
 
             if self.is_login_successful(current_url, page_title):
                 self.log.info("Login successful!")
+                # 로그인 성공 시 쿠키 저장
+                await self.save_session_cookies(page)
                 return True
             else:
                 self.log.error("Login failed!")
@@ -223,3 +226,93 @@ class KakaoLoginHelper:
             import traceback
             self.log.error(traceback.format_exc())
             return False
+
+    async def save_session_cookies(self, page) -> bool:
+        """
+        로그인 성공 후 쿠키 저장
+
+        Args:
+            page: Playwright page
+
+        Returns:
+            저장 성공 여부
+        """
+        try:
+            context = page.context
+            cookies = await context.cookies()
+            if save_cookies(cookies, self.log):
+                self.log.info("Session cookies saved for future use")
+                return True
+            return False
+        except Exception as e:
+            self.log.error(f"Failed to save session cookies: {e}")
+            return False
+
+    async def try_cookie_login(self, page) -> bool:
+        """
+        저장된 쿠키로 로그인 시도
+
+        Args:
+            page: Playwright page
+
+        Returns:
+            쿠키 로그인 성공 여부
+        """
+        cookies = load_cookies(self.log)
+        if not cookies:
+            self.log.info("No valid cookies found, need full login")
+            return False
+
+        try:
+            self.log.info("Trying to login with saved cookies...")
+
+            # 쿠키를 컨텍스트에 적용
+            context = page.context
+            await context.add_cookies(cookies)
+
+            # FastCampus 메인 페이지로 이동하여 로그인 상태 확인
+            await page.goto('https://fastcampus.co.kr/me/course', wait_until='networkidle', timeout=30000)
+            await page.wait_for_timeout(2000)
+
+            current_url = page.url
+            page_title = await page.title()
+
+            # 로그인 페이지로 리다이렉트되지 않았는지 확인
+            if 'sign-in' not in current_url and '로그인' not in page_title:
+                self.log.info("=" * 70)
+                self.log.info("Cookie login successful! (2단계 인증 생략)")
+                self.log.info("=" * 70)
+                return True
+            else:
+                self.log.info("Saved cookies expired or invalid, need full login")
+                delete_cookies(self.log)
+                return False
+
+        except Exception as e:
+            self.log.error(f"Cookie login failed: {e}")
+            delete_cookies(self.log)
+            return False
+
+    async def login_with_cookies(self, page, take_screenshots: bool = False) -> bool:
+        """
+        쿠키 기반 로그인 시도, 실패 시 전체 로그인 수행
+
+        Args:
+            page: Playwright page (should be on FastCampus sign-in page)
+            take_screenshots: Whether to save screenshots for debugging
+
+        Returns:
+            True if login successful, False otherwise
+        """
+        # 1. 먼저 저장된 쿠키로 로그인 시도
+        if await self.try_cookie_login(page):
+            return True
+
+        # 2. 쿠키 로그인 실패 시 전체 로그인 수행
+        self.log.info("Performing full Kakao login...")
+
+        # 로그인 페이지로 이동
+        await page.goto('https://fastcampus.co.kr/account/sign-in', wait_until='networkidle', timeout=30000)
+        await page.wait_for_timeout(2000)
+
+        return await self.login(page, take_screenshots)

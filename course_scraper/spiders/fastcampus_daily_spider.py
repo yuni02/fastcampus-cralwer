@@ -65,7 +65,7 @@ class FastCampusDailySpider(scrapy.Spider):
         page = response.meta['playwright_page']
 
         try:
-            success = await self.login_helper.login(page)
+            success = await self.login_helper.login_with_cookies(page)
 
             if success:
                 self.logged_in = True
