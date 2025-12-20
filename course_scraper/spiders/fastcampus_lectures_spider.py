@@ -1,25 +1,7 @@
 import scrapy
-import os
 from scrapy_playwright.page import PageMethod
 
-# credentials.py에서 로그인 정보 가져오기
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-credentials_path = os.path.join(project_root, 'credentials.py')
-
-KAKAO_EMAIL = None
-KAKAO_PASSWORD = None
-
-if os.path.exists(credentials_path):
-    with open(credentials_path, 'r', encoding='utf-8') as f:
-        exec_globals = {}
-        exec(f.read(), exec_globals)
-        KAKAO_EMAIL = exec_globals.get('KAKAO_EMAIL')
-        KAKAO_PASSWORD = exec_globals.get('KAKAO_PASSWORD')
-else:
-    raise FileNotFoundError(f"credentials.py not found at {credentials_path}")
-
-if not KAKAO_EMAIL or not KAKAO_PASSWORD:
-    raise ValueError("KAKAO_EMAIL or KAKAO_PASSWORD not set in credentials.py")
+from course_scraper.utils import KakaoLoginHelper, extract_course_title
 
 
 class FastCampusLecturesSpider(scrapy.Spider):
@@ -45,6 +27,7 @@ class FastCampusLecturesSpider(scrapy.Spider):
         self.course_id = course_id
         self.course_url = f'https://fastcampus.co.kr/classroom/{course_id}'
         self.logger.info(f"Target course: {self.course_url}")
+        self.login_helper = KakaoLoginHelper(logger_instance=self.logger)
 
     def start_requests(self):
         yield scrapy.Request(
@@ -62,110 +45,17 @@ class FastCampusLecturesSpider(scrapy.Spider):
         )
 
     async def login(self, response):
-        """카카오 로그인 자동화"""
+        """Kakao login automation"""
         page = response.meta['playwright_page']
 
         try:
-            self.logger.info("Starting Kakao login process...")
+            success = await self.login_helper.login(page)
 
-            # 카카오 로그인 버튼 클릭
-            selectors = [
-                'button:has-text("카카오로 1초 만에 시작하기")',
-                'button:has-text("카카오")',
-                'a:has-text("카카오로 1초 만에 시작하기")',
-                '[class*="kakao"]',
-            ]
-
-            clicked = False
-            for selector in selectors:
-                try:
-                    await page.click(selector, timeout=5000)
-                    self.logger.info(f"✓ Clicked Kakao button")
-                    clicked = True
-                    break
-                except Exception:
-                    continue
-
-            if not clicked:
-                self.logger.error("✗ Could not find Kakao login button")
-                await page.close()
-                return
-
-            await page.wait_for_timeout(3000)
-
-            # 이메일 입력
-            email_selectors = ['input[name="loginId"]', 'input[type="email"]', '#loginId']
-            for selector in email_selectors:
-                try:
-                    await page.fill(selector, KAKAO_EMAIL, timeout=3000)
-                    self.logger.info(f"✓ Entered email")
-                    break
-                except Exception:
-                    continue
-
-            # 비밀번호 입력
-            password_selectors = ['input[name="password"]', 'input[type="password"]', '#password']
-            for selector in password_selectors:
-                try:
-                    await page.fill(selector, KAKAO_PASSWORD, timeout=3000)
-                    self.logger.info(f"✓ Entered password")
-                    break
-                except Exception:
-                    continue
-
-            # 로그인 버튼 클릭
-            login_selectors = ['button[type="submit"]', 'button:has-text("로그인")', '.btn_confirm']
-            for selector in login_selectors:
-                try:
-                    await page.click(selector, timeout=3000)
-                    self.logger.info(f"✓ Clicked login button")
-                    break
-                except Exception:
-                    continue
-
-            # 2FA 대기
-            self.logger.info("=" * 70)
-            self.logger.info("⚠️  KakaoTalk 앱에서 2단계 인증을 승인해주세요! ⚠️")
-            self.logger.info("90초 대기 중...")
-            self.logger.info("=" * 70)
-
-            max_wait_time = 90
-            check_interval = 2
-
-            for i in range(0, max_wait_time, check_interval):
-                await page.wait_for_timeout(check_interval * 1000)
-
-                # Continue 버튼 찾기
-                continue_selectors = ['button.btn_confirm', 'button:has-text("Continue")', 'button:has-text("확인")']
-                for selector in continue_selectors:
-                    try:
-                        btn = await page.query_selector(selector)
-                        if btn and await btn.is_visible():
-                            await btn.click()
-                            self.logger.info("✓ Clicked Continue button!")
-                            await page.wait_for_timeout(3000)
-                            break
-                    except Exception:
-                        continue
-
-                # FastCampus로 리디렉트되었는지 확인
-                current_url = page.url
-                if 'fastcampus.co.kr' in current_url and 'sign-in' not in current_url:
-                    self.logger.info(f"✓ Successfully redirected to FastCampus!")
-                    break
-
-            current_url = page.url
-            page_title = await page.title()
-
-            # 로그인 성공 확인
-            if 'sign-in' not in current_url and '인증' not in page_title:
-                self.logger.info("✓ Login successful!")
+            if success:
                 self.logged_in = True
-
-                # 페이지 닫기
                 await page.close()
 
-                # 특정 코스 URL로 크롤링 요청
+                # Crawl specific course
                 self.logger.info(f"Starting to crawl course: {self.course_url}")
                 yield scrapy.Request(
                     self.course_url,
@@ -181,7 +71,6 @@ class FastCampusLecturesSpider(scrapy.Spider):
                     dont_filter=True
                 )
             else:
-                self.logger.error("✗ Login failed!")
                 await page.close()
 
         except Exception as e:
@@ -192,112 +81,31 @@ class FastCampusLecturesSpider(scrapy.Spider):
                 await page.close()
 
     async def parse(self, response):
-        """페이지 파싱 및 강의 정보 추출하여 DB 저장"""
+        """Parse page and extract course info to save to DB"""
         page = response.meta.get('playwright_page')
 
         try:
-            # 페이지 제목 확인
             page_title = await page.title() if page else response.css('title::text').get()
             self.logger.info(f"Parsing: {response.url}")
             self.logger.info(f"Page title: {page_title}")
 
-            # 로그인 확인
+            # Login check
             if '인증' in page_title or 'sign-in' in response.url:
-                self.logger.error(f"✗ Still on login page! Session expired.")
+                self.logger.error("Still on login page! Session expired.")
                 if page:
                     await page.close()
                 return
 
-            # Course ID 추출
+            # Extract course ID
             course_id = response.url.split('/classroom/')[-1].split('?')[0]
 
-            # 강의 제목 추출 - 여러 방법 시도
-            course_title = None
-            self.logger.info(f"Page title for extraction: {page_title}")
-
-            # 방법 1: 페이지 타이틀에서 추출 (패스트캠퍼스 온라인 강의 - {제목} 형식)
-            if ' - ' in page_title:
-                course_title = page_title.split(' - ', 1)[1].strip()
-                self.logger.info(f"Title from page title (split by ' - '): {course_title}")
-            elif '|' in page_title:
-                course_title = page_title.split('|')[0].strip()
-                self.logger.info(f"Title from page title (split by '|'): {course_title}")
-
-            # 방법 2: 페이지에서 직접 제목 요소 찾기
-            if not course_title or len(course_title) < 5:
-                if page:
-                    try:
-                        # 사이드바 헤더의 강의 제목
-                        title_selectors = [
-                            '.classroom-sidebar-clip__header__title',
-                            '.classroom-header__title',
-                            '.course-title',
-                            'header h1',
-                            'h1.title',
-                            'h1'
-                        ]
-                        for selector in title_selectors:
-                            try:
-                                title_elem = await page.query_selector(selector)
-                                if title_elem:
-                                    title_text = await title_elem.inner_text()
-                                    if title_text and len(title_text.strip()) >= 5:
-                                        course_title = title_text.strip()
-                                        self.logger.info(f"Title from selector '{selector}': {course_title}")
-                                        break
-                            except:
-                                continue
-                    except Exception as e:
-                        self.logger.warning(f"Could not extract title from page elements: {e}")
-
-            # 방법 3: DB에서 기존 제목 가져오기 (이미 저장된 제목이 있다면)
-            if not course_title or len(course_title) < 5 or course_title.startswith('Course '):
-                try:
-                    import pymysql
-                    # credentials에서 DB 정보 가져오기
-                    MYSQL_HOST = 'localhost'
-                    MYSQL_PORT = 3306
-                    MYSQL_USER = 'root'
-                    MYSQL_PASSWORD = ''
-                    MYSQL_DATABASE = 'crawler'
-
-                    if os.path.exists(credentials_path):
-                        with open(credentials_path, 'r', encoding='utf-8') as f:
-                            exec_globals = {}
-                            exec(f.read(), exec_globals)
-                            MYSQL_HOST = exec_globals.get('MYSQL_HOST', MYSQL_HOST)
-                            MYSQL_PORT = exec_globals.get('MYSQL_PORT', MYSQL_PORT)
-                            MYSQL_USER = exec_globals.get('MYSQL_USER', MYSQL_USER)
-                            MYSQL_PASSWORD = exec_globals.get('MYSQL_PASSWORD', MYSQL_PASSWORD)
-                            MYSQL_DATABASE = exec_globals.get('MYSQL_DATABASE', MYSQL_DATABASE)
-
-                    connection = pymysql.connect(
-                        host=MYSQL_HOST,
-                        port=MYSQL_PORT,
-                        user=MYSQL_USER,
-                        password=MYSQL_PASSWORD,
-                        database=MYSQL_DATABASE,
-                        charset='utf8mb4'
-                    )
-                    with connection.cursor() as cursor:
-                        cursor.execute("SELECT course_title FROM courses WHERE course_id = %s", (course_id,))
-                        row = cursor.fetchone()
-                        if row and row[0] and not row[0].startswith('Course '):
-                            course_title = row[0]
-                            self.logger.info(f"Title from DB: {course_title}")
-                    connection.close()
-                except Exception as e:
-                    self.logger.warning(f"Could not get title from DB: {e}")
-
-            # 최종 폴백
-            if not course_title or len(course_title) < 5:
-                course_title = f'Course {course_id}'
-                self.logger.warning(f"Using fallback title: {course_title}")
-
-            course_title = course_title.strip()
+            # Extract course title using shared utility
+            course_title = await extract_course_title(
+                page, page_title, course_id, self.logger
+            )
             self.logger.info(f"Course: {course_title}")
 
-            # 진도율, 학습시간, 전체시간 추출
+            # Extract progress rate, study time, total lecture time
             progress_rate = 0.0
             study_time = 0
             total_lecture_time = 0
@@ -305,15 +113,13 @@ class FastCampusLecturesSpider(scrapy.Spider):
             if page:
                 try:
                     page_text = await page.inner_text('body')
-
                     import re
-                    # 수강률 추출
+
                     progress_match = re.search(r'수강률\s*(\d+(?:\.\d+)?)\s*%', page_text)
                     if progress_match:
                         progress_rate = float(progress_match.group(1))
                         self.logger.info(f"  Progress: {progress_rate}%")
 
-                    # 수강시간 추출
                     study_match = re.search(r'수강시간\s*(\d+):(\d+)(?::(\d+))?', page_text)
                     if study_match:
                         first = int(study_match.group(1))
@@ -327,7 +133,6 @@ class FastCampusLecturesSpider(scrapy.Spider):
 
                         self.logger.info(f"  Study time: {study_time} min")
 
-                    # 강의시간 추출
                     total_match = re.search(r'강의시간\s*(\d+):(\d+):(\d+)', page_text)
                     if total_match:
                         hours = int(total_match.group(1))
@@ -338,7 +143,7 @@ class FastCampusLecturesSpider(scrapy.Spider):
                 except Exception as e:
                     self.logger.warning(f"Could not extract time info: {str(e)[:100]}")
 
-            # CourseItem 생성
+            # Create CourseItem
             from course_scraper.items import CourseItem
             course_item = CourseItem(
                 course_id=course_id,
@@ -350,9 +155,9 @@ class FastCampusLecturesSpider(scrapy.Spider):
             )
 
             yield course_item
-            self.logger.info(f"✓ Yielded CourseItem: {course_title}")
+            self.logger.info(f"Yielded CourseItem: {course_title}")
 
-            # 커리큘럼 추출
+            # Extract curriculum
             curriculum = await self.extract_curriculum_playwright(page) if page else []
 
             if curriculum:
@@ -365,7 +170,6 @@ class FastCampusLecturesSpider(scrapy.Spider):
                     chapters = section.get('chapters')
 
                     if chapters:
-                        # Chapter 구조가 있는 경우
                         for chapter in chapters:
                             chapter_number = chapter.get('chapter_number')
                             chapter_title = chapter.get('chapter_title')
@@ -394,9 +198,7 @@ class FastCampusLecturesSpider(scrapy.Spider):
                                 )
 
                                 yield lecture_item
-
                     else:
-                        # Chapter 구조가 없고 Section 레벨에서 바로 강의
                         lessons = section.get('lessons', [])
 
                         for lecture_idx, lesson in enumerate(lessons, 1):
@@ -423,9 +225,9 @@ class FastCampusLecturesSpider(scrapy.Spider):
 
                             yield lecture_item
 
-                self.logger.info(f"✓ Extracted {len(curriculum)} sections, {sort_order} total lectures")
+                self.logger.info(f"Extracted {len(curriculum)} sections, {sort_order} total lectures")
             else:
-                self.logger.warning(f"✗ No curriculum found for {response.url}")
+                self.logger.warning(f"No curriculum found for {response.url}")
 
         except Exception as e:
             self.logger.error(f"Error parsing {response.url}: {e}")
@@ -437,15 +239,14 @@ class FastCampusLecturesSpider(scrapy.Spider):
                 await page.close()
 
     async def extract_curriculum_playwright(self, page):
-        """Playwright를 사용하여 커리큘럼 추출 - 모든 nested 아코디언 섹션 펼치기"""
+        """Extract curriculum using Playwright - open all nested accordion sections"""
         curriculum = []
 
         try:
-            # 커리큘럼 영역이 로드될 때까지 대기
             await page.wait_for_selector('.classroom-sidebar-clip__chapter', timeout=10000)
             await page.wait_for_timeout(2000)
 
-            # STEP 1: 페이지 내 모든 아코디언 헤더 아이콘 찾기
+            # STEP 1: Find all accordion headers
             self.logger.info("=" * 80)
             self.logger.info("STEP 1: Finding ALL accordion headers with arrow icons...")
             self.logger.info("=" * 80)
@@ -453,7 +254,7 @@ class FastCampusLecturesSpider(scrapy.Spider):
             all_headers = await page.query_selector_all('.common-accordion-menu__header')
             self.logger.info(f"Found {len(all_headers)} total accordion headers")
 
-            # STEP 2: 모든 아코디언 헤더를 차근차근 클릭하여 펼치기
+            # STEP 2: Open all accordion sections
             self.logger.info("=" * 80)
             self.logger.info("STEP 2: Opening ALL accordion sections one by one...")
             self.logger.info("=" * 80)
@@ -493,9 +294,9 @@ class FastCampusLecturesSpider(scrapy.Spider):
                     self.logger.warning(f"  Error opening header {idx}: {str(e)[:100]}")
                     continue
 
-            self.logger.info(f"✓ Opened {opened_count} accordion sections")
+            self.logger.info(f"Opened {opened_count} accordion sections")
 
-            # STEP 3: 추가 섹션이 있을 수 있으므로 한번 더 확인하고 열기
+            # STEP 3: Double check for remaining closed sections
             self.logger.info("=" * 80)
             self.logger.info("STEP 3: Double-checking for any remaining closed sections...")
             self.logger.info("=" * 80)
@@ -525,11 +326,11 @@ class FastCampusLecturesSpider(scrapy.Spider):
                             await page.wait_for_timeout(600)
                             additional_opened += 1
 
-                except Exception as e:
+                except Exception:
                     continue
 
             if additional_opened > 0:
-                self.logger.info(f"✓ Opened {additional_opened} additional sections on second pass")
+                self.logger.info(f"Opened {additional_opened} additional sections on second pass")
 
             await page.wait_for_timeout(3000)
 
@@ -537,27 +338,22 @@ class FastCampusLecturesSpider(scrapy.Spider):
             self.logger.info("All accordion sections opened! Now extracting curriculum data...")
             self.logger.info("=" * 80)
 
-            # 다시 모든 섹션 가져오기
             section_elements = await page.query_selector_all('.classroom-sidebar-clip__chapter')
 
             for section_idx, section_elem in enumerate(section_elements, 1):
                 try:
-                    # 섹션(Part) 제목
                     section_title_elem = await section_elem.query_selector('.classroom-sidebar-clip__chapter__title__text')
                     section_title = await section_title_elem.inner_text() if section_title_elem else f'Section {section_idx}'
                     section_title = section_title.strip()
 
-                    # 완료/전체 강의 수
                     complete_elem = await section_elem.query_selector('.classroom-sidebar-clip__chapter__title__number__complete')
                     total_elem = await section_elem.query_selector('.classroom-sidebar-clip__chapter__title__number__total')
                     complete_count = int(await complete_elem.inner_text()) if complete_elem else 0
                     total_count = int(await total_elem.inner_text()) if total_elem else 0
 
-                    # Chapter들을 찾기
                     chapter_elements = await section_elem.query_selector_all('.classroom-sidebar-clip__chapter__part__title')
 
                     if chapter_elements and len(chapter_elements) > 0:
-                        # Chapter 구조가 있는 경우
                         self.logger.info(f"  Section {section_idx}: {section_title} (has {len(chapter_elements)} chapters)")
 
                         chapters_data = []
@@ -619,7 +415,6 @@ class FastCampusLecturesSpider(scrapy.Spider):
                             })
 
                     else:
-                        # Chapter 구조가 없는 경우
                         lecture_elements = await section_elem.query_selector_all('.classroom-sidebar-clip__chapter__clip')
                         lessons = []
 
@@ -667,7 +462,7 @@ class FastCampusLecturesSpider(scrapy.Spider):
                     self.logger.warning(traceback.format_exc())
                     continue
 
-            self.logger.info(f"✓ Extracted {len(curriculum)} sections total")
+            self.logger.info(f"Extracted {len(curriculum)} sections total")
 
         except Exception as e:
             self.logger.error(f"Error extracting curriculum: {e}")
@@ -677,17 +472,13 @@ class FastCampusLecturesSpider(scrapy.Spider):
         return curriculum
 
     def parse_duration(self, duration_str):
-        """시간 문자열을 분 단위로 변환
-        예: "25:50" -> 25.83분 (25분 50초)
-            "1:30:45" -> 90.75분 (1시간 30분 45초)
-        """
+        """Convert time string to minutes"""
         if not duration_str:
             return 0
 
         total_minutes = 0
         import re
 
-        # "1시간 30분" 형식
         hours_match = re.search(r'(\d+)\s*시간', duration_str)
         minutes_match = re.search(r'(\d+)\s*분', duration_str)
 
@@ -696,15 +487,14 @@ class FastCampusLecturesSpider(scrapy.Spider):
         if minutes_match:
             total_minutes += int(minutes_match.group(1))
 
-        # "HH:MM:SS" 또는 "MM:SS" 형식
         if ':' in duration_str:
             time_parts = duration_str.strip().split(':')
-            if len(time_parts) == 3:  # HH:MM:SS
+            if len(time_parts) == 3:
                 hours = int(time_parts[0])
                 minutes = int(time_parts[1])
                 seconds = int(time_parts[2])
                 total_minutes = hours * 60 + minutes + round(seconds / 60, 2)
-            elif len(time_parts) == 2:  # MM:SS
+            elif len(time_parts) == 2:
                 minutes = int(time_parts[0])
                 seconds = int(time_parts[1])
                 total_minutes = minutes + round(seconds / 60, 2)
@@ -712,8 +502,8 @@ class FastCampusLecturesSpider(scrapy.Spider):
         return round(total_minutes, 2)
 
     async def errback(self, failure):
-        """에러 처리"""
+        """Error handling"""
         page = failure.request.meta.get('playwright_page')
         if page:
             await page.close()
-        self.logger.error(f"✗ Request failed: {failure.request.url}")
+        self.logger.error(f"Request failed: {failure.request.url}")

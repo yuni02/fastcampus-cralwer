@@ -131,10 +131,25 @@ DOWNLOAD_HANDLERS = {
 }
 
 PLAYWRIGHT_BROWSER_TYPE = "chromium"
+
+# 환경 감지: Docker 컨테이너 또는 서버 환경인지 확인
+# - DOCKER_ENV 환경변수가 설정되어 있거나
+# - /.dockerenv 파일이 존재하거나
+# - DISPLAY 환경변수가 없으면 서버 환경으로 판단
+_is_docker = os.environ.get('DOCKER_ENV', '').lower() == 'true'
+_is_server = os.path.exists('/.dockerenv') or not os.environ.get('DISPLAY')
+_is_headless = _is_docker or _is_server
+
 PLAYWRIGHT_LAUNCH_OPTIONS = {
-    "headless": True,  # 서버에서는 headless 모드로 실행
+    "headless": _is_headless,  # 로컬: False (브라우저 표시), 서버/Docker: True
     "timeout": 120000,  # 브라우저 시작 타임아웃 2분
 }
+
+# 디버그 로그
+if _is_headless:
+    print(f"[Settings] Running in HEADLESS mode (Docker: {_is_docker}, Server: {_is_server})")
+else:
+    print(f"[Settings] Running in HEADED mode (browser will be visible)")
 
 # 브라우저 컨텍스트 설정 - 로그인 세션 유지
 PLAYWRIGHT_CONTEXTS = {
