@@ -5,6 +5,7 @@ import logging
 from typing import Optional, Callable, Any
 
 from .credentials import get_kakao_credentials
+from .paths import get_screenshot_path
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +177,7 @@ class KakaoLoginHelper:
             self.log.info("Starting Kakao login process...")
 
             if take_screenshots:
-                await page.screenshot(path='screenshot_1_initial.png')
+                await page.screenshot(path=get_screenshot_path('login_1_initial'))
 
             # Step 1: Click Kakao button
             if not await self.click_kakao_button(page):
@@ -202,7 +203,7 @@ class KakaoLoginHelper:
             await page.wait_for_timeout(3000)
 
             if take_screenshots:
-                await page.screenshot(path='screenshot_4_after_login_click.png')
+                await page.screenshot(path=get_screenshot_path('login_4_after_click'))
 
             await self.wait_for_2fa(page)
 

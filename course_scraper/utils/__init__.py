@@ -11,6 +11,17 @@ from .db import (
 )
 from .kakao_login import KakaoLoginHelper
 from .title_extractor import extract_course_title
+from .paths import (
+    get_screenshot_path,
+    get_log_path,
+    get_debug_path,
+    get_output_path,
+    BACKUP_DIR,
+    SCREENSHOTS_DIR,
+    LOGS_DIR,
+    DEBUG_DIR,
+    OUTPUT_DIR,
+)
 
 __all__ = [
     'get_credentials',
@@ -25,4 +36,13 @@ __all__ = [
     'get_manually_completed_course_ids',
     'KakaoLoginHelper',
     'extract_course_title',
+    'get_screenshot_path',
+    'get_log_path',
+    'get_debug_path',
+    'get_output_path',
+    'BACKUP_DIR',
+    'SCREENSHOTS_DIR',
+    'LOGS_DIR',
+    'DEBUG_DIR',
+    'OUTPUT_DIR',
 ]

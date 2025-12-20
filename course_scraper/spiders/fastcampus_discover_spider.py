@@ -1,7 +1,7 @@
 import scrapy
 from scrapy_playwright.page import PageMethod
 
-from course_scraper.utils import KakaoLoginHelper
+from course_scraper.utils import KakaoLoginHelper, get_screenshot_path
 
 
 class FastCampusDiscoverSpider(scrapy.Spider):
@@ -87,7 +87,7 @@ class FastCampusDiscoverSpider(scrapy.Spider):
 
                     current_url = page.url
                     self.logger.info(f"Navigated to: {current_url}")
-                    await page.screenshot(path='screenshot_discover_courses_page.png')
+                    await page.screenshot(path=get_screenshot_path('discover_courses_page'))
 
                     # Click 수강중 tab
                     tab_selectors = ['button:has-text("수강중")', 'a:has-text("수강중")', '[role="tab"]:has-text("수강중")']

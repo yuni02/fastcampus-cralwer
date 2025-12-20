@@ -5,6 +5,7 @@ from course_scraper.utils import (
     KakaoLoginHelper,
     extract_course_title,
     get_manually_completed_course_ids,
+    get_screenshot_path,
 )
 
 
@@ -57,7 +58,7 @@ class FastCampusSpider(scrapy.Spider):
 
                     current_url = page.url
                     self.logger.info(f"Navigated to: {current_url}")
-                    await page.screenshot(path='screenshot_courses_page.png')
+                    await page.screenshot(path=get_screenshot_path('courses_page'))
 
                     # Click 수강중 tab
                     tab_selectors = ['button:has-text("수강중")', 'a:has-text("수강중")', '[role="tab"]:has-text("수강중")']
