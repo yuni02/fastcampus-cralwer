@@ -80,7 +80,31 @@ USE crawler;
 
 ## 사용 방법
 
-### 기본 실행 방법
+### API 서버 실행 (FastAPI)
+
+Next.js 등 프론트엔드에서 크롤링을 요청할 수 있는 API 서버입니다.
+
+```bash
+# 가상환경 활성화 후
+uvicorn api.main:app --reload --port 8000
+```
+
+**접속 URL:**
+- API 루트: http://localhost:8000
+- API 문서 (Swagger): http://localhost:8000/docs
+- 헬스 체크: http://localhost:8000/health
+
+**주요 API 엔드포인트:**
+| 메서드 | 엔드포인트 | 설명 |
+|--------|-----------|------|
+| GET | `/api/spiders` | 사용 가능한 스파이더 목록 |
+| POST | `/api/crawl` | 크롤링 시작 |
+| GET | `/api/crawl/{job_id}` | 크롤링 상태 확인 |
+| GET | `/api/jobs` | 모든 작업 목록 |
+| DELETE | `/api/crawl/{job_id}` | 크롤링 작업 취소 |
+| GET | `/api/crawl/{job_id}/result` | 크롤링 결과 조회 |
+
+### 기본 실행 방법 (Scrapy CLI)
 
 ```bash
 # 1. 가상환경 활성화
@@ -161,6 +185,43 @@ scrapy crawl fastcampus_lectures -a course_id=214390
 scrapy crawl fastcampus_test
 ```
 
+#### 6. `fastcampus_recrawl` (주 1회 실행, 데이터 정합성 검증)
+강의시간 데이터가 맞지 않는 강의들을 자동으로 찾아서 재크롤링
+
+```bash
+# 기본 실행 (10% 이상 차이나는 강의 재크롤링)
+scrapy crawl fastcampus_recrawl
+
+# 차이 비율 조정 (5% 이상 차이나는 강의 재크롤링)
+scrapy crawl fastcampus_recrawl -a time_diff_percent=0.05
+
+# 20% 이상 차이나는 강의만 재크롤링
+scrapy crawl fastcampus_recrawl -a time_diff_percent=0.2
+```
+
+**동작 방식**:
+1. DB에서 `courses.total_lecture_time`과 `lectures` 테이블의 시간 합계를 비교
+2. 지정된 비율(기본 10%) 이상 차이나는 강의를 자동으로 찾음
+3. 해당 강의의 기존 `lectures` 데이터를 삭제
+4. 강의 페이지를 다시 크롤링하여 최신 데이터로 갱신
+
+**사용 시나리오**:
+- 강의가 업데이트되어 lectures 개수나 시간이 변경되었을 때
+- 크롤링 중 오류로 일부 lectures가 누락되었을 때
+- 데이터 정합성을 주기적으로 검증하고 싶을 때
+
+**파라미터**:
+| 파라미터 | 기본값 | 설명 |
+|---------|--------|------|
+| `time_diff_percent` | 0.1 (10%) | 시간 차이 허용 비율 (0.05 = 5%, 0.2 = 20%) |
+
+**예시 로그 출력**:
+```
+Found 3 courses with time difference > 10.0%
+  214390: Python 기초... (expected: 120.0min, actual: 95.0min, diff: 25.0min)
+  246575: React 완벽... (expected: 200.0min, actual: 180.0min, diff: 20.0min)
+```
+
 ### 추천 실행 순서 (처음이라면)
 
 #### 방법 1: 전체 강의 자동 수집 (추천)
@@ -189,6 +250,7 @@ scrapy crawl fastcampus_lectures -a course_id=246575
 | `fastcampus_discover` | URL 발견 | course_id, url (기본 정보만) | 월 1회 또는 새 강의 추가 시 |
 | `fastcampus_daily` | 진도 업데이트 | 제목, 진도율, 수강시간, lectures | 매일 또는 진도 확인할 때 |
 | `fastcampus_lectures` | 개별 크롤링 | 제목, 진도율, 수강시간, lectures | 특정 강의 1개만 빠르게 수집 |
+| `fastcampus_recrawl` | 데이터 정합성 검증 | lectures 재수집 (기존 삭제 후 갱신) | 주 1회 또는 데이터 불일치 시 |
 | `fastcampus` | 전체 크롤링 | 모든 정보 (URL + 크롤링) | 처음 1회 전체 수집 시 |
 
 ### 기타 유용한 옵션
