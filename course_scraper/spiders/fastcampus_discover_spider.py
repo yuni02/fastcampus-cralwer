@@ -1,7 +1,7 @@
 import scrapy
 from scrapy_playwright.page import PageMethod
 
-from course_scraper.utils import KakaoLoginHelper, get_screenshot_path
+from course_scraper.utils import KakaoLoginHelper, get_screenshot_path, extract_course_title
 
 
 class FastCampusDiscoverSpider(scrapy.Spider):
@@ -56,27 +56,29 @@ class FastCampusDiscoverSpider(scrapy.Spider):
                 self.logged_in = True
                 await page.wait_for_timeout(1000)
 
-                # If course_ids specified, create URLs directly (fast mode)
+                # If course_ids specified, visit each course page to get title
                 if self.target_course_ids:
-                    self.logger.info(f"Fast mode: Creating URLs directly for {len(self.target_course_ids)} courses")
+                    self.logger.info(f"Visiting {len(self.target_course_ids)} course pages to get titles...")
                     await page.close()
 
-                    from course_scraper.items import CourseItem
                     for idx, course_id in enumerate(self.target_course_ids, start=1):
                         url = f'https://fastcampus.co.kr/classroom/{course_id}'
-                        self.logger.info(f"  {idx}. Creating URL for course_id: {course_id}")
+                        self.logger.info(f"  {idx}. Visiting course_id: {course_id}")
 
-                        course_item = CourseItem(
-                            course_id=course_id,
-                            course_title=f'Course {course_id}',  # placeholder
-                            progress_rate=0.0,
-                            study_time=0,
-                            total_lecture_time=0,
-                            url=url
+                        yield scrapy.Request(
+                            url,
+                            callback=self.parse_course,
+                            meta={
+                                'playwright': True,
+                                'playwright_include_page': True,
+                                'playwright_page_methods': [
+                                    PageMethod('wait_for_timeout', 3000),
+                                ],
+                            },
+                            errback=self.errback,
+                            dont_filter=True
                         )
-                        yield course_item
 
-                    self.logger.info(f"Created {len(self.target_course_ids)} course items")
                     return
 
                 # Navigate to my courses (only when course_ids not specified)
@@ -236,21 +238,26 @@ class FastCampusDiscoverSpider(scrapy.Spider):
                         if not_found:
                             self.logger.warning(f"Target course IDs not found: {not_found}")
 
-                    # Create items for courses table
-                    from course_scraper.items import CourseItem
+                    # Visit each course page to get title
+                    self.logger.info(f"Visiting {len(course_urls)} course pages to get titles...")
 
                     for idx, url in enumerate(course_urls, start=1):
                         course_id = url.split('/classroom/')[-1].split('?')[0]
+                        self.logger.info(f"  {idx}. Visiting course_id: {course_id}")
 
-                        course_item = CourseItem(
-                            course_id=course_id,
-                            course_title=f'Course {course_id}',  # placeholder
-                            progress_rate=0.0,
-                            study_time=0,
-                            total_lecture_time=0,
-                            url=url
+                        yield scrapy.Request(
+                            url,
+                            callback=self.parse_course,
+                            meta={
+                                'playwright': True,
+                                'playwright_include_page': True,
+                                'playwright_page_methods': [
+                                    PageMethod('wait_for_timeout', 3000),
+                                ],
+                            },
+                            errback=self.errback,
+                            dont_filter=True
                         )
-                        yield course_item
 
                 except Exception as e:
                     self.logger.error(f"Navigation failed: {e}")
@@ -265,6 +272,91 @@ class FastCampusDiscoverSpider(scrapy.Spider):
             self.logger.error(f"Login failed: {e}")
             import traceback
             self.logger.error(traceback.format_exc())
+            if page:
+                await page.close()
+
+    async def parse_course(self, response):
+        """Parse course page to extract title and basic info"""
+        page = response.meta.get('playwright_page')
+
+        try:
+            page_title = await page.title() if page else response.css('title::text').get()
+            self.logger.info(f"Parsing: {response.url}")
+
+            # Login check
+            if '인증' in page_title or 'sign-in' in response.url:
+                self.logger.error("Still on login page! Session expired.")
+                if page:
+                    await page.close()
+                return
+
+            # Extract course ID
+            course_id = response.url.split('/classroom/')[-1].split('?')[0]
+
+            # Extract course title using shared utility
+            course_title = await extract_course_title(
+                page, page_title, course_id, self.logger
+            )
+            self.logger.info(f"Course: {course_title}")
+
+            # Extract progress rate, study time, total lecture time
+            progress_rate = 0.0
+            study_time = 0
+            total_lecture_time = 0
+
+            if page:
+                try:
+                    page_text = await page.inner_text('body')
+                    import re
+
+                    progress_match = re.search(r'수강률\s*(\d+(?:\.\d+)?)\s*%', page_text)
+                    if progress_match:
+                        progress_rate = float(progress_match.group(1))
+                        self.logger.info(f"  Progress: {progress_rate}%")
+
+                    study_match = re.search(r'수강시간\s*(\d+):(\d+)(?::(\d+))?', page_text)
+                    if study_match:
+                        first = int(study_match.group(1))
+                        second = int(study_match.group(2))
+                        third = int(study_match.group(3)) if study_match.group(3) else None
+
+                        if third is not None:
+                            study_time = first * 60 + second + round(third / 60, 2)
+                        else:
+                            study_time = first + round(second / 60, 2)
+
+                        self.logger.info(f"  Study time: {study_time} min")
+
+                    total_match = re.search(r'강의시간\s*(\d+):(\d+):(\d+)', page_text)
+                    if total_match:
+                        hours = int(total_match.group(1))
+                        minutes = int(total_match.group(2))
+                        seconds = int(total_match.group(3))
+                        total_lecture_time = hours * 60 + minutes + (seconds / 60)
+                        self.logger.info(f"  Total time: {total_lecture_time} min")
+                except Exception as e:
+                    self.logger.warning(f"Could not extract time info: {str(e)[:100]}")
+
+            # Create CourseItem
+            from course_scraper.items import CourseItem
+            course_item = CourseItem(
+                course_id=course_id,
+                course_title=course_title,
+                progress_rate=progress_rate,
+                study_time=study_time,
+                total_lecture_time=total_lecture_time,
+                url=response.url
+            )
+
+            yield course_item
+            self.logger.info(f"Yielded CourseItem: {course_title}")
+
+        except Exception as e:
+            self.logger.error(f"Error parsing {response.url}: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+
+        finally:
             if page:
                 await page.close()
 
