@@ -57,8 +57,8 @@ wheels/
 .DS_Store
 Thumbs.db
 
-# Credentials - NEVER COMMIT!
-credentials.py
+# Credentials - NEVER COMMIT! (root level only)
+/credentials.py
 .env
 **/settings_local.py
 **/*_secret.py
