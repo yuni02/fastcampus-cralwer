@@ -115,26 +115,48 @@ class MySQLPipeline:
         # display_order가 있는지 확인
         has_display_order = item.get('display_order') is not None
 
+        # course_title이 fallback 값인지 확인 (Course 로 시작하면 fallback)
+        course_title = item.get('course_title', 'Unknown Title')
+        is_fallback_title = course_title.startswith('Course ') or course_title == 'Unknown Title'
+
         if has_display_order:
-            sql = """
-                INSERT INTO courses (
-                    course_id, course_title, progress_rate, study_time,
-                    total_lecture_time, url, display_order
-                ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s
-                )
-                ON DUPLICATE KEY UPDATE
-                    course_title = VALUES(course_title),
-                    progress_rate = VALUES(progress_rate),
-                    study_time = VALUES(study_time),
-                    total_lecture_time = VALUES(total_lecture_time),
-                    url = VALUES(url),
-                    display_order = VALUES(display_order),
-                    updated_at = CURRENT_TIMESTAMP
-            """
+            if is_fallback_title:
+                # fallback 타이틀이면 기존 DB 값 유지
+                sql = """
+                    INSERT INTO courses (
+                        course_id, course_title, progress_rate, study_time,
+                        total_lecture_time, url, display_order
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s
+                    )
+                    ON DUPLICATE KEY UPDATE
+                        progress_rate = VALUES(progress_rate),
+                        study_time = VALUES(study_time),
+                        total_lecture_time = VALUES(total_lecture_time),
+                        url = VALUES(url),
+                        display_order = VALUES(display_order),
+                        updated_at = CURRENT_TIMESTAMP
+                """
+            else:
+                sql = """
+                    INSERT INTO courses (
+                        course_id, course_title, progress_rate, study_time,
+                        total_lecture_time, url, display_order
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s
+                    )
+                    ON DUPLICATE KEY UPDATE
+                        course_title = VALUES(course_title),
+                        progress_rate = VALUES(progress_rate),
+                        study_time = VALUES(study_time),
+                        total_lecture_time = VALUES(total_lecture_time),
+                        url = VALUES(url),
+                        display_order = VALUES(display_order),
+                        updated_at = CURRENT_TIMESTAMP
+                """
             values = (
                 course_id,
-                item.get('course_title', 'Unknown Title'),
+                course_title,
                 item.get('progress_rate'),
                 item.get('study_time'),
                 item.get('total_lecture_time'),
@@ -142,24 +164,41 @@ class MySQLPipeline:
                 item.get('display_order')
             )
         else:
-            sql = """
-                INSERT INTO courses (
-                    course_id, course_title, progress_rate, study_time,
-                    total_lecture_time, url
-                ) VALUES (
-                    %s, %s, %s, %s, %s, %s
-                )
-                ON DUPLICATE KEY UPDATE
-                    course_title = VALUES(course_title),
-                    progress_rate = VALUES(progress_rate),
-                    study_time = VALUES(study_time),
-                    total_lecture_time = VALUES(total_lecture_time),
-                    url = VALUES(url),
-                    updated_at = CURRENT_TIMESTAMP
-            """
+            if is_fallback_title:
+                # fallback 타이틀이면 기존 DB 값 유지
+                sql = """
+                    INSERT INTO courses (
+                        course_id, course_title, progress_rate, study_time,
+                        total_lecture_time, url
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s
+                    )
+                    ON DUPLICATE KEY UPDATE
+                        progress_rate = VALUES(progress_rate),
+                        study_time = VALUES(study_time),
+                        total_lecture_time = VALUES(total_lecture_time),
+                        url = VALUES(url),
+                        updated_at = CURRENT_TIMESTAMP
+                """
+            else:
+                sql = """
+                    INSERT INTO courses (
+                        course_id, course_title, progress_rate, study_time,
+                        total_lecture_time, url
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s
+                    )
+                    ON DUPLICATE KEY UPDATE
+                        course_title = VALUES(course_title),
+                        progress_rate = VALUES(progress_rate),
+                        study_time = VALUES(study_time),
+                        total_lecture_time = VALUES(total_lecture_time),
+                        url = VALUES(url),
+                        updated_at = CURRENT_TIMESTAMP
+                """
             values = (
                 course_id,
-                item.get('course_title', 'Unknown Title'),
+                course_title,
                 item.get('progress_rate'),
                 item.get('study_time'),
                 item.get('total_lecture_time'),
@@ -167,6 +206,9 @@ class MySQLPipeline:
             )
 
         self.cursor.execute(sql, values)
+
+        if is_fallback_title:
+            logging.warning(f"Fallback title '{course_title}' detected for course_id {course_id} - keeping existing DB title")
 
     def save_lecture_item(self, item):
         """LectureItem 저장"""
