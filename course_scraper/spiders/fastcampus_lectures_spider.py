@@ -44,6 +44,7 @@ class FastCampusLecturesSpider(scrapy.Spider):
             dont_filter=True
         )
 
+
     async def login(self, response):
         """Kakao login automation"""
         page = response.meta['playwright_page']
