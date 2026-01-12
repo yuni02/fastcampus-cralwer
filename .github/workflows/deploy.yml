@@ -4,21 +4,13 @@ on:
   push:
     branches:
       - main
-  workflow_dispatch:  # 수동 실행 가능
+  workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Debug secrets
-        run: |
-          echo "HOST length: ${#HOST}"
-          echo "PORT value: $PORT"
-        env:
-          HOST: ${{ secrets.SERVER_HOST }}
-          PORT: ${{ secrets.SERVER_PORT }}
-
       - name: Deploy to Server via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -26,12 +18,12 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           port: 1122
-          debug: true
           script: |
             cd ${{ secrets.PROJECT_PATH }}
 
-            # 최신 코드 pull
-            git pull origin main
+            # 최신 코드 강제 동기화 (로컬 변경사항 무시)
+            git fetch origin main
+            git reset --hard origin/main
 
             # credentials.py 생성 (GitHub Secrets에서)
             cat > credentials.py << 'EOF'
@@ -46,10 +38,10 @@ jobs:
             EOF
 
             # Docker 컨테이너 재빌드 및 실행
-            docker-compose down
+            docker-compose down || true
             docker-compose up -d --build
 
             # 정리 (오래된 이미지 삭제)
             docker image prune -f
 
-            echo "✅ Deployment completed!"
+            echo "Crawler API deployment completed!"
