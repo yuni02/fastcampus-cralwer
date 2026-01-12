@@ -259,24 +259,24 @@ scrapy crawl fastcampus_lectures -a course_id=246575
 |----------|:--------:|:-----:|:--------:|:-------:|
 | course_id | O | O | O | O |
 | url | O | O | O | O |
-| course_title | X (placeholder) | O | O | O |
-| progress_rate (진도율) | X | O | O | O |
-| study_time (수강시간) | X | O | O | O |
-| total_lecture_time (강의시간) | X | O | O | O |
+| course_title | O | O | O | O |
+| progress_rate (진도율) | O | O | O | O |
+| study_time (수강시간) | O | O | O | O |
+| total_lecture_time (강의시간) | O | O | O | O |
 | lectures (목차) | X | O | O | O |
 
 **핵심 차이점**:
 
 | Spider | 데이터 소스 | 특징 |
 |--------|------------|------|
-| `discover` | 강의 목록 페이지 | URL만 수집, 강의 상세 페이지 방문 안함 |
-| `daily` | DB에 저장된 URL | DB에 있는 강의들을 순회하며 상세 정보 수집 |
+| `discover` | 강의 목록 → 각 강의 페이지 | 기본 정보만 수집, lectures(목차) 수집 안함 |
+| `daily` | DB에 저장된 URL | DB에 있는 강의들을 순회하며 lectures까지 수집 |
 | `lectures` | 직접 입력한 course_id | DB에 없어도 바로 크롤링 가능 (1개만) |
 | `recrawl` | DB 자동 검색 | 시간 불일치 강의를 찾아서 lectures 삭제 후 재수집 |
 
 **요약**:
-- `discover`: "이 강의가 있다"만 기록 (URL 등록용)
-- `daily` / `lectures` / `recrawl`: 실제 강의 내용을 수집 (진도, 시간, 목차 등)
+- `discover`: 강의 기본 정보 수집 (제목, 진도율, 시간), lectures(목차)는 수집 안함
+- `daily` / `lectures` / `recrawl`: 강의 기본 정보 + lectures(목차)까지 전부 수집
 
 ### 기타 유용한 옵션
 
