@@ -18,7 +18,8 @@ services:
     networks:
       - default
       - mysql-network
-    # 헬스체크
+      - dashboard-network
+    # 헬스체크!
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/"]
       interval: 30s
@@ -30,3 +31,6 @@ networks:
   mysql-network:
     external: true
     name: db_mysql-network
+  dashboard-network:
+    external: true
+    name: course_scraper_default
